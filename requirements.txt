@@ -1,0 +1,8 @@
+opensearch-py>=2.6
+httpx>=0.27
+beautifulsoup4>=4.12
+boto3>=1.34
+cloudscraper>=1.2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pytest>=8.0

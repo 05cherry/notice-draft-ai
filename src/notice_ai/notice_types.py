@@ -455,6 +455,7 @@ class Part:
     inputs: dict
     matched: str = ""          # 라우팅 근거(매칭된 표현)
     overridden: bool = False   # 사용자가 subtype을 직접 지정
+    estimated: bool = False    # 규칙으로 못 정해 비슷한 공지로 추정(사용자 확인 필요)
 
     @property
     def category(self) -> str:
@@ -462,7 +463,7 @@ class Part:
 
     def to_dict(self) -> dict:
         return {"category": self.category, "subtype": self.ntype.subtype, "label": self.ntype.label,
-                "matched": self.matched, "overridden": self.overridden}
+                "matched": self.matched, "overridden": self.overridden, "estimated": self.estimated}
 
 
 @dataclass
@@ -478,6 +479,12 @@ class Resolution:
         return not (self.errors or self.missing or self.invalid)
 
 
+def routing_text(text: str, inputs: dict | None) -> str:
+    """유형 판별에 쓰는 문장 = 요청문 + (구)action + 사유."""
+    inputs = inputs or {}
+    return " ".join(str(x) for x in (text, inputs.get("action", ""), inputs.get("reason", "")) if x)
+
+
 def resolve(
     categories: list[str],
     *,
@@ -485,11 +492,14 @@ def resolve(
     inputs: dict | None = None,
     part_inputs: dict[str, dict] | None = None,
     subtypes: dict[str, str] | None = None,
+    estimated: dict[str, str] | None = None,
 ) -> Resolution:
     """카테고리(1~2개) + 요청문 + 문답값 → 파트별 유형·입력 + 누락/오류 목록.
 
     inputs 는 파트 공통 값, part_inputs[카테고리] 는 그 파트에만 적용되는 값(덮어쓰기).
     예) 거래유의+거래지원종료에서 파트마다 대상 코인이 다를 때.
+    estimated[카테고리]: 규칙 판별이 general일 때만 쓰는 추정 유형(drafting.estimate_subtypes).
+    사용자가 subtypes로 지정한 값이 항상 우선한다.
     """
     res = Resolution()
     cats = [c.strip() for c in (categories or []) if c and c.strip()]
@@ -509,7 +519,8 @@ def resolve(
     inputs = inputs or {}
     part_inputs = part_inputs or {}
     subtypes = subtypes or {}
-    route_text = " ".join(str(x) for x in (text, inputs.get("action", ""), inputs.get("reason", "")) if x)
+    estimated = estimated or {}
+    route_text = routing_text(text, inputs)
 
     for c in cats:
         if c not in TARGET_CATEGORIES:
@@ -524,7 +535,11 @@ def resolve(
             part = Part(ntype, {}, overridden=True)
         else:
             ntype, matched = route(c, route_text)
-            part = Part(ntype, {}, matched=matched)
+            guess = get_type(c, estimated[c]) if c in estimated else None
+            if ntype.subtype == "general" and guess is not None:
+                part = Part(guess, {}, matched="비슷한 공지로 추정", estimated=True)
+            else:
+                part = Part(ntype, {}, matched=matched)
         part.inputs = normalize_inputs({**inputs, **part_inputs.get(c, {})}, part.ntype)
         if "topic" in part.ntype.fields and is_empty(part.inputs.get("topic")) and text.strip():
             part.inputs["topic"] = text.strip()   # general은 요청문을 공지 주제로 쓴다

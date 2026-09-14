@@ -14,11 +14,17 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from notice_ai.search import SearchHit, hybrid_search, search_notices
+from notice_ai.search import SearchHit, search_page
+
+_WEB = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(title="notice-draft-ai API", version="0.1")
 
@@ -39,7 +45,7 @@ class SearchHitOut(BaseModel):
     categories: list[str]
     published_at: str | None
     score: float
-    snippet: str
+    snippet: str                 # HTML로 안전한 발췌(검색어는 <em>으로 감쌈)
 
     @classmethod
     def from_hit(cls, h: SearchHit) -> "SearchHitOut":
@@ -55,8 +61,15 @@ class SearchHitOut(BaseModel):
 
 class SearchResponse(BaseModel):
     query: str
-    count: int
+    total: int                   # 전체 결과 수(1위 점수 50% 이상, 카테고리를 골랐으면 그 안에서)
+    count: int                   # 이번 페이지 건수
+    page: int
+    size: int
+    sort: str                    # relevance | recent
+    min_score: float             # 이 점수 미만은 결과에서 뺐다(1위 점수 × 0.5)
+    categories: dict[str, int]   # 카테고리별 결과 수(필터 버튼용, 고른 카테고리와 무관)
     hits: list[SearchHitOut]
+    related: list[SearchHitOut]  # 본 목록에 없지만 뜻이 비슷한 공지(의미 검색, 1쪽에만)
 
 
 @app.get("/health")
@@ -69,31 +82,33 @@ def health() -> dict:
 def search(
     q: str = Query(..., description="검색어"),
     category: str | None = Query(None, description="카테고리명(선택)"),
-    hybrid: bool = Query(False, description="벡터 하이브리드 사용(임베딩 필요)"),
-    rerank: bool = Query(False, description="리랭커 사용(Bedrock 필요)"),
-    limit: int = Query(10, ge=1, le=50),
+    page: int = Query(1, ge=1, description="쪽 번호(1부터)"),
+    size: int = Query(10, ge=1, le=50, description="쪽당 건수"),
+    sort: Literal["relevance", "recent"] = Query("relevance", description="관련도순(동점은 최신) / 최신순"),
+    related: bool = Query(True, description="1쪽에 뜻이 비슷한 공지(의미 검색) 붙이기. Bedrock 필요, 실패 시 빈 목록"),
+    limit: int | None = Query(None, ge=1, le=50, description="(구) size"),
 ) -> SearchResponse:
-    """유사 공지 검색 (기능 1).
+    """공지 검색창 (기능 1).
 
-    - hybrid=false: BM25(Nori)만. 임베딩/Bedrock 없이 바로 동작.
-    - hybrid=true : BM25 + 벡터 RRF. 임베딩 없으면 자동으로 BM25만.
+    BM25(Nori)로 찾되 1위 점수의 50% 미만은 뺀다(사전에 없는 이름이 조각으로 쪼개져 붙는 긴 꼬리 제거).
+    total·categories는 그 기준의 전체 건수. related는 단어가 안 겹쳐 본 목록에 없는 비슷한 공지.
     """
-    if hybrid:
-        hits = hybrid_search(
-            q,
-            {"category": category} if category else {},
-            use_rerank=rerank,
-            category_name=category,
-            limit=limit,
-        )
-    else:
-        hits = search_notices(q, category_name=category, limit=limit)
-
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="검색어를 입력하세요.")
+    r = search_page(q, category=category, page=page, size=limit or size, sort=sort, related=related)
     return SearchResponse(
-        query=q,
-        count=len(hits),
-        hits=[SearchHitOut.from_hit(h) for h in hits],
+        query=r.query, total=r.total, count=len(r.hits), page=r.page, size=r.size, sort=r.sort,
+        min_score=r.min_score, categories=r.categories,
+        hits=[SearchHitOut.from_hit(h) for h in r.hits],
+        related=[SearchHitOut.from_hit(h) for h in r.related],
     )
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def ui() -> str:
+    """간단한 공지 검색 화면(/search 호출). 사내 테스트용 — 정식 프론트는 별도."""
+    return (_WEB / "search.html").read_text(encoding="utf-8")
 
 
 # ---- 초안 생성 (기능 2) ----

@@ -1,6 +1,9 @@
-./.idea/**
-./.env
-./CLAUDE.md
-./tests/**
-./data/**
-./src/notice_ai/prompts/**
+/.idea/
+.env
+/CLAUDE.md
+/tests/
+/data/
+/src/notice_ai/prompts/
+venv
+__pycache__/
+.pytest_cache/

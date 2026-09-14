@@ -167,6 +167,8 @@ class DraftRequest(BaseModel):
                                          description="카테고리별로만 다른 값. 예) {'거래지원종료': {'coins': [...]}}")
     base_notice_url: str | None = Field(None, description="사용자가 직접 고른 참고 공지(없으면 자동 선택)")
     evaluate: bool = Field(True, description="LLM 평가 포함(비용 발생). 코드 검증은 항상 수행")
+    hybrid: bool = Field(False, description="참고 공지 후보에 의미 검색(Bedrock 임베딩)을 섞기. "
+                                            "유형이 정해진 요청은 BM25와 결과가 같고 general 문장형에서만 소폭 나음")
 
     def resolved_categories(self) -> list[str]:
         return self.categories or ([self.category] if self.category else [])
@@ -213,7 +215,7 @@ def _run(req: DraftRequest, prepare_only: bool) -> DraftResponse:
     o = draft_notice(
         req.resolved_categories(), text=req.text, inputs=req.merged_inputs(),
         part_inputs=req.part_inputs, subtypes=req.subtypes, base_notice_url=req.base_notice_url,
-        evaluate_draft=req.evaluate, prepare_only=prepare_only,
+        evaluate_draft=req.evaluate, prepare_only=prepare_only, hybrid=req.hybrid,
     )
     d = o.to_dict()
     sel = o.selected_reference or {}

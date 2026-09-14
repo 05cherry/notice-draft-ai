@@ -122,7 +122,10 @@ class DraftRequest(BaseModel):
 
 class DraftResponse(BaseModel):
     status: str                      # error | need_input | ready | ok | needs_review
-    parts: list[dict]
+    parts: list[dict]                # {category, subtype, label, matched, overridden, estimated}
+    # 요청문 규칙으로 유형을 못 정해 비슷한 공지로 추정한 파트: {category, subtype, label, votes, k, neighbors[]}.
+    # 화면에 '추정'으로 보여 주고, 사용자가 바꾸면 이후 요청에 subtypes로 보낸다.
+    estimated_subtypes: list[dict] = []
     missing_fields: list[dict]
     invalid_fields: list[dict]
     errors: list[str]
@@ -188,6 +191,7 @@ class CheckRequest(DraftRequest):
 class CheckResponse(BaseModel):
     status: str                  # error | ok | needs_review
     parts: list[dict]
+    estimated_subtypes: list[dict] = []
     missing_fields: list[dict]
     invalid_fields: list[dict]
     errors: list[str]
@@ -237,6 +241,8 @@ def types() -> list[dict]:
 def prepare(req: DraftRequest) -> DraftResponse:
     """유형 판별 + 누락 필드 + 유사 공지 후보(top-k)·자동 선택 이유. LLM 호출 없음.
 
+    요청문 규칙으로 유형을 못 정하면 비슷한 공지들의 유형으로 추정해 적용하고 estimated_subtypes에 근거를 준다
+    (parts[].estimated=true). 추정이 틀렸으면 subtypes로 바로잡아 다시 호출한다.
     missing_fields가 비고 후보를 확인했으면 같은 값(+원하면 base_notice_url)으로 /draft 호출.
     """
     return _run(req, prepare_only=True)

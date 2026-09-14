@@ -103,9 +103,23 @@ def vector_search(qvec: list[float], filters: dict, size: int = 30) -> list[Sear
     fc = _filter_clauses(filters)
     if fc:
         knn["embedding"]["filter"] = {"bool": {"filter": fc}}
-    body = {"size": size, "query": {"knn": knn}}
+    body = {"size": size, "_source": {"excludes": ["embedding"]}, "query": {"knn": knn}}
     res = get_client().search(index=config.INDEX_NAME, body=body)
     return [_hit(h, h["_score"]) for h in res["hits"]["hits"]]
+
+
+def vector_similarity(qvec: list[float], ids: list[str]) -> dict[str, float]:
+    """공지(id=source_url)별 질의 벡터와의 코사인 유사도. 둘 다 정규화돼 있어 내적이 곧 코사인.
+    BM25로만 찾은 후보에도 의미 점수를 매기려고 쓴다. 임베딩 없는 공지는 결과에서 빠진다."""
+    if not ids:
+        return {}
+    res = get_client().mget(index=config.INDEX_NAME, body={"ids": list(ids)}, _source_includes=["embedding"])
+    out = {}
+    for d in res["docs"]:
+        vec = (d.get("_source") or {}).get("embedding")
+        if d.get("found") and vec:
+            out[d["_id"]] = sum(a * b for a, b in zip(qvec, vec))
+    return out
 
 
 def hybrid_search(
@@ -135,8 +149,8 @@ def hybrid_search(
     except Exception:
         vec = []  # 임베딩 미설정/실패 → BM25만
 
-    by_id = {h.source_url: h for h in kw}
-    by_id.update({h.source_url: h for h in vec})
+    by_id = {h.source_url: h for h in vec}
+    by_id.update({h.source_url: h for h in kw})   # 둘 다 나오면 BM25 쪽(하이라이트 snippet 있음)을 쓴다
     fused = fusion.rrf_fuse([[h.source_url for h in kw], [h.source_url for h in vec]])
     ordered = [i for i, _ in fused]
 

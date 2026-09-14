@@ -86,6 +86,22 @@
   코드·IAM 문제가 아니다. 기다렸다가 다시 시도하고, 2시간이 넘으면 AWS에 문의(aws-verification@amazon.com).
 - **이 PC의 AWS 자격증명이 루트 계정 키**
   → 운영 전 최소 권한 IAM 사용자/역할로 교체 권장(Bedrock InvokeModel 등 필요한 것만).
+  (2026-09-15: 05mango IAM 사용자 키로 교체. 운영 전 최소 권한 분리는 여전히 필요)
+- **`aws sts get-caller-identity`가 SignatureDoesNotMatch**
+  → 키 ID는 맞는데 시크릿이 틀린 것(환경변수가 없으면 ~/.aws/credentials 값). 손으로 옮겨 적으면
+  l/I/1, O/0, 대소문자에서 틀리기 쉽다(실제로 40자 중 2자 오타). CSV에서 복사해 `aws configure`에 붙여넣기.
+- **벡터 검색 결과마다 1024차원 벡터가 딸려 옴**
+  → knn 쿼리에 `_source.excludes: ["embedding"]`가 없었다(BM25 쪽에만 있었음). 추가함.
+- **Titan 코사인 유사도는 0.3~0.6에 몰려 있어 BM25(최댓값 대비 0~1)와 그대로 섞으면 차이가 안 난다**
+  → 하이브리드 순위에서는 후보 안 최소~최대로 0~1로 펴서 섞는다(drafting._relevance).
+- **초안 후보 검색에 하이브리드를 켜도 문장형 요청이 여전히 엉뚱한 공지를 고름**
+  → 검색이 아니라 유형 판별 문제. 규칙(route)이 '늦게 처리', '기간을 늘리려고' 같은 말투를 못 잡아 general로
+  가면 등급(tier)이 general 기준으로 매겨진다. 정답 유형을 주면 BM25만으로도 96%. (tests/eval_hybrid.py [1b])
+  → 규칙이 general이면 뜻이 가까운 공지 5건의 유형 다수결로 추정(drafting.resolve_with_estimate). 2/11 → 10/11.
+  추정은 틀릴 수 있어(예: '명절 상담 시간 변경' → 서비스 장애) 응답에 estimated로 표시하고 사용자가 바꾸게 한다.
+- **오프라인 테스트가 Bedrock을 부르려 함**
+  → 유형 추정은 draft_notice/check_notice 안에서 자동으로 돈다. tests/conftest.py의 autouse fixture가
+  drafting.semantic_neighbors를 빈 결과로 바꿔 둔다(모듈 속성을 호출 시점에 찾으므로 monkeypatch가 먹는다).
 
 ## LLM / 초안
 - **openai RateLimitError: insufficient_quota**

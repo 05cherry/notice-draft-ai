@@ -2,6 +2,7 @@
 
   입력(카테고리 1~2개 + 요청문 + 문답값)
    → 유형 판별·필수값 검증(notice_types)      부족하면 need_input 반환, LLM 호출 없음
+     (규칙으로 못 정하면 뜻이 가까운 공지들의 유형으로 추정 → estimated_subtypes, 사용자 확인용)
    → 유사 공지 후보 검색(BM25 + 유형 구절 가점, 동점은 최신순 + 같은 유형 최신 공지 풀)
    → 참고 공지 선택(제목으로 판별한 유형 일치 > 검색점수·최신성, 본문 없는 공지 제외) 또는 사용자 지정
    → 프롬프트: 입력값(유일한 사실 출처) / 사실값을 가린 참고 공지(형식·문체 전용)
@@ -14,8 +15,8 @@
 from __future__ import annotations
 
 import re
-from collections import OrderedDict
-from dataclasses import asdict, dataclass, field
+from collections import Counter, OrderedDict
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -26,12 +27,16 @@ from notice_ai.llm import LLM, get_llm
 from notice_ai.notice_types import (
     FIELDS,
     Part,
+    Resolution,
     classify_title,
     display_value,
     field_label,
+    get_type,
     is_empty,
     resolve,
+    routing_text,
     title_hint,
+    types_for,
 )
 from notice_ai.search import SearchHit, bm25_search
 
@@ -52,6 +57,13 @@ RECENCY_DAYS = 365 * 3     # 최신성: 오늘=1.0 → 3년 전=0.0 (선형)
 # 주제가 제각각인 general은 내용 관련도가 더 중요하다.
 W_TYPED = (0.5, 0.5)
 W_GENERAL = (0.8, 0.2)
+# 하이브리드(선택)일 때 검색점수 = α·BM25(후보 중 최댓값 대비) + (1-α)·의미 유사도(후보 안에서 0~1로 폄)
+HYBRID_ALPHA = 0.5
+# 유형 추정: 규칙 판별이 general이면 요청문과 뜻이 가까운 공지 K건의 유형 다수결(SHARE 이상)로 추정.
+# 사용자 말투 요청 11개에서 규칙 2/11 → 10/11, 기존 라벨링 20/20·general 23/24 유지(tests/eval_hybrid.py [3]).
+ESTIMATE_K = 5
+ESTIMATE_SHARE = 0.6
+ESTIMATE_MIN_TEXT = 8      # 요청문이 이보다 짧으면 추정하지 않는다(뜻을 가늠하기 어려움)
 
 _TIER_TEXT = {
     0: "유형 일치",
@@ -95,13 +107,14 @@ class Candidate:
     tier: int = 4
     recency: float = 0.0
     rank_score: float = 0.0
+    relevance: float = 0.0      # 0~1 검색점수(BM25, 하이브리드면 의미 유사도 섞음)
 
     def brief(self, rank: int | None = None) -> dict:
         h = self.hit
         return {"rank": rank, "source_url": h.source_url, "title": h.title, "categories": h.categories,
                 "published_at": h.published_at, "score": round(h.score, 3), "subtypes": self.subtypes,
                 "tier": self.tier, "match": _TIER_TEXT[self.tier], "recency": round(self.recency, 3),
-                "rank_score": round(self.rank_score, 3)}
+                "relevance": round(self.relevance, 3), "rank_score": round(self.rank_score, 3)}
 
 
 def _coin_tokens(parts: list[Part]) -> set[str]:
@@ -131,9 +144,12 @@ def build_query(parts: list[Part], text: str = "") -> str:
     return q or " ".join(p.ntype.label for p in parts)
 
 
-def find_candidates(parts: list[Part], query: str, *, search: Callable = bm25_search) -> tuple[list[SearchHit], str]:
+def find_candidates(
+    parts: list[Part], query: str, *, search: Callable = bm25_search, semantic: Callable | None = None,
+) -> tuple[list[SearchHit], str]:
     """선택한 카테고리를 모두 가진 공지를 찾는다. 2개를 골랐으면 1차 카테고리 공지도 합친다
-    (같은 '유의촉구 및 입출금 일시 중단' 공지인데 [안내]만 달린 것도 있어 태그만 믿을 수 없다)."""
+    (같은 '유의촉구 및 입출금 일시 중단' 공지인데 [안내]만 달린 것도 있어 태그만 믿을 수 없다).
+    semantic(filters, size)를 주면 의미 검색(kNN) 결과도 합친다(하이브리드, 선택)."""
     cats = [p.category for p in parts]
     boost = tuple(b for p in parts for b in p.ntype.title_boost)
     hits = search(query, {"categories": cats}, CANDIDATE_POOL, boost_phrases=boost, sort="score")
@@ -156,6 +172,13 @@ def find_candidates(parts: list[Part], query: str, *, search: Callable = bm25_se
         n = merge(search(query, {"categories": [cats[0]], "title_phrase": phrase}, RECENT_POOL,
                          boost_phrases=boost, sort="recent"))
         note += f" + 제목에 '{phrase}'가 있는 최신 공지 {n}건"
+    if semantic is not None:
+        # 단어가 안 겹쳐도 뜻이 비슷한 공지. BM25 상위에 없던 공지라 BM25 점수는 0으로 둔다
+        try:
+            n = merge([replace(h, score=0.0) for h in semantic({"categories": cats}, CANDIDATE_POOL)])
+            note += f" + 의미 검색으로만 찾은 공지 {n}건"
+        except Exception:
+            note += " (의미 검색 실패 → BM25만)"
     return hits, note
 
 
@@ -166,7 +189,7 @@ def _age_days(published_at: str | None, now: datetime) -> float:
         return float(RECENCY_DAYS)
 
 
-def _candidate(h: SearchHit, parts: list[Part], now: datetime, max_score: float) -> Candidate:
+def _candidate(h: SearchHit, parts: list[Part], now: datetime, relevance: float) -> Candidate:
     """등급: 0 유형 일치 / 1 유형 일치지만 다른 내용이 합쳐진 공지 / 3 유형 다름 / 4 카테고리 불일치.
     유형은 카테고리 태그가 아니라 제목으로 판별한다(태그가 일부만 붙은 공지가 있어서)."""
     cats = [p.category for p in parts]
@@ -184,14 +207,97 @@ def _candidate(h: SearchHit, parts: list[Part], now: datetime, max_score: float)
         tier = 4
     rec = max(0.0, 1 - _age_days(h.published_at, now) / RECENCY_DAYS)
     w_score, w_rec = W_GENERAL if all(p.ntype.subtype == "general" for p in parts) else W_TYPED
-    return Candidate(h, subs, tier, rec, w_score * (h.score / max_score if max_score else 0) + w_rec * rec)
+    return Candidate(h, subs, tier, rec, w_score * relevance + w_rec * rec, relevance)
 
 
-def rank_candidates(hits: list[SearchHit], parts: list[Part], *, now: datetime) -> list[Candidate]:
-    """본문 없는 공지 제외 → (tier 오름차순, 검색점수·최신성 가중합 내림차순)."""
+def _relevance(hits: list[SearchHit], sims: dict[str, float] | None) -> dict[str, float]:
+    """후보별 검색점수(0~1). BM25는 최댓값 대비. sims가 있으면 의미 유사도를 후보 안 최소~최대로
+    0~1로 펴서 HYBRID_ALPHA로 섞는다(Titan 코사인은 0.3~0.6에 몰려 있어 그대로 쓰면 차이가 안 난다)."""
+    max_score = max((h.score for h in hits), default=0.0) or 1.0
+    rel = {h.source_url: h.score / max_score for h in hits}
+    if sims is None:
+        return rel
+    vals = [sims[u] for u in rel if u in sims]
+    lo, hi = (min(vals), max(vals)) if vals else (0.0, 1.0)
+    span = (hi - lo) or 1.0
+    return {u: HYBRID_ALPHA * b + (1 - HYBRID_ALPHA) * ((sims[u] - lo) / span if u in sims else 0.0)
+            for u, b in rel.items()}
+
+
+def semantic_hooks(query: str) -> tuple[Callable, Callable]:
+    """하이브리드용 (kNN 검색 함수, 후보별 의미 유사도 함수). 질의 임베딩(Bedrock 호출)은 한 번만."""
+    from notice_ai.embeddings import embed_query
+    from notice_ai.search import vector_search, vector_similarity
+
+    qvec = embed_query(query)
+    return (lambda filters, size: vector_search(qvec, filters, size)), (lambda ids: vector_similarity(qvec, ids))
+
+
+# ── 유형 추정(규칙으로 못 정한 요청문) ──────────────────────────────────────
+def semantic_neighbors(category: str, text: str, k: int) -> list[SearchHit]:
+    """요청문과 뜻이 가까운 이 카테고리 공지 k건(Bedrock 임베딩 + kNN)."""
+    from notice_ai.embeddings import embed_query
+    from notice_ai.search import vector_search
+
+    return vector_search(embed_query(text), {"categories": [category]}, k)
+
+
+def estimate_subtypes(res: Resolution, text: str, inputs: dict | None) -> tuple[dict[str, str], list[dict], list[str]]:
+    """규칙 판별이 general이고 사용자가 유형을 지정하지 않은 파트만, 뜻이 가까운 공지 K건의 유형 다수결로 추정.
+    '출금이 늦게 처리돼요'(→ 지연), '유의 종목 기간을 늘리려고요'(→ 연장)처럼 규칙 표현이 없는 말투용.
+    반환: ({카테고리: 추정 subtype}, 근거 목록, 경고). 임베딩·검색이 실패하면 추정 없이 규칙 결과를 쓴다."""
+    q = routing_text(text, inputs).strip()
+    est: dict[str, str] = {}
+    info: list[dict] = []
+    warnings: list[str] = []
+    for p in res.parts:
+        if p.ntype.subtype != "general" or p.overridden or len(types_for(p.category)) < 2 or len(q) < ESTIMATE_MIN_TEXT:
+            continue
+        try:
+            hits = semantic_neighbors(p.category, q, ESTIMATE_K)
+        except Exception as e:
+            warnings.append(f"'{p.category}' 유형 추정(의미 검색)에 실패해 일반 유형으로 진행합니다: {str(e)[:80]}")
+            continue
+        subs = [classify_title(h.title, [p.category],
+                               body=factcheck.original_version(h.title, h.body)[1][:1500])[p.category] for h in hits]
+        if not subs:
+            continue
+        top, votes = Counter(subs).most_common(1)[0]
+        if top == "general" or votes / ESTIMATE_K < ESTIMATE_SHARE:
+            continue
+        label = get_type(p.category, top).label
+        est[p.category] = top
+        info.append({"category": p.category, "subtype": top, "label": label, "votes": votes, "k": len(hits),
+                     "neighbors": [{"title": h.title, "subtype": s, "source_url": h.source_url,
+                                    "published_at": h.published_at} for h, s in zip(hits, subs)]})
+        warnings.append(f"'{p.category}' 유형을 요청문 규칙으로 정하지 못해, 비슷한 공지 {len(hits)}건 중 {votes}건을 "
+                        f"근거로 '{label}'(으)로 추정했습니다. 다르면 유형을 직접 지정하세요(subtypes).")
+    return est, info, warnings
+
+
+def resolve_with_estimate(
+    categories: list[str], *, text: str = "", inputs: dict | None = None,
+    part_inputs: dict[str, dict] | None = None, subtypes: dict[str, str] | None = None,
+) -> tuple[Resolution, list[dict]]:
+    """resolve + 유형 추정. 추정되면 그 유형으로 다시 풀어(필수 질문도 그 유형 기준) 추정 표시를 단다."""
+    res = resolve(categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
+    if res.errors:
+        return res, []
+    est, info, warnings = estimate_subtypes(res, text, inputs)
+    if est:
+        res = resolve(categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes, estimated=est)
+    res.warnings.extend(warnings)
+    return res, info
+
+
+def rank_candidates(
+    hits: list[SearchHit], parts: list[Part], *, now: datetime, sims: dict[str, float] | None = None,
+) -> list[Candidate]:
+    """본문 없는 공지 제외 → (tier 오름차순, 검색점수·최신성 가중합 내림차순).
+    sims(공지 URL → 질의와의 의미 유사도)를 주면 검색점수에 의미 유사도를 섞는다(하이브리드)."""
     usable = [h for h in hits if len(h.body.strip()) >= MIN_BODY]
-    max_score = max((h.score for h in usable), default=0.0) or 1.0
-    ranked = [_candidate(h, parts, now, max_score) for h in usable]
+    rel = _relevance(usable, sims)
+    ranked = [_candidate(h, parts, now, rel[h.source_url]) for h in usable]
     ranked.sort(key=lambda c: (c.tier, -c.rank_score))
     return ranked
 
@@ -249,9 +355,11 @@ def check_notice(
 ) -> dict:
     """사용자가 고친 초안을 코드 검사로만 다시 확인한다(LLM 호출 없음).
     참고 공지를 주면 그 공지의 가상자산이 섞였는지도 본다(고유 문장 복사 검사는 /draft에서만)."""
-    res = resolve(categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
-    out = {"status": "error", "parts": [p.to_dict() for p in res.parts], "missing_fields": res.missing,
-           "invalid_fields": res.invalid, "errors": list(res.errors), "warnings": list(res.warnings)}
+    res, estimated = resolve_with_estimate(
+        categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
+    out = {"status": "error", "parts": [p.to_dict() for p in res.parts], "estimated_subtypes": estimated,
+           "missing_fields": res.missing, "invalid_fields": res.invalid, "errors": list(res.errors),
+           "warnings": list(res.warnings)}
     if res.errors:
         return out
     ref_tickers: set[str] = set()
@@ -412,6 +520,7 @@ def build_revision_prompt(user_prompt: str, draft: str, problems: list[str]) -> 
 class DraftOutcome:
     status: str = "ok"          # error | need_input | ready(prepare) | ok | needs_review
     parts: list[dict] = field(default_factory=list)
+    estimated_subtypes: list[dict] = field(default_factory=list)   # 비슷한 공지로 추정한 유형과 근거(확인 필요)
     missing_fields: list[dict] = field(default_factory=list)
     invalid_fields: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -482,10 +591,14 @@ def draft_notice(
     get_notice: Callable | None = None,
     now: datetime | None = None,
     top_k: int = 5,
+    hybrid: bool = False,
+    semantic: Callable = semantic_hooks,
 ) -> DraftOutcome:
-    """전체 흐름. prepare_only=True면 후보·선택까지만(LLM 호출 없음)."""
+    """전체 흐름. prepare_only=True면 후보·선택까지만(LLM 호출 없음).
+    hybrid=True면 후보 검색·순위에 의미 검색(Bedrock 임베딩)을 섞는다. 실패하면 경고 후 BM25만."""
     out = DraftOutcome()
-    res = resolve(categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
+    res, out.estimated_subtypes = resolve_with_estimate(
+        categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
     out.parts = [p.to_dict() for p in res.parts]
     out.missing_fields, out.invalid_fields = res.missing, res.invalid
     out.errors, out.warnings = list(res.errors), list(res.warnings)
@@ -498,12 +611,24 @@ def draft_notice(
 
     # 후보는 필수값이 모자라도 보여준다(문답 중에 참고할 수 있게)
     out.query = build_query(parts, text)
+    knn = similarity = None
+    if hybrid:
+        try:
+            knn, similarity = semantic(out.query)
+        except Exception as e:
+            out.warnings.append(f"의미 검색을 쓰지 못해 BM25만 사용했습니다: {str(e)[:120]}")
     try:
-        hits, out.retrieval_note = find_candidates(parts, out.query, search=search)
+        hits, out.retrieval_note = find_candidates(parts, out.query, search=search, semantic=knn)
     except Exception as e:
         hits, out.retrieval_note = [], "검색 실패"
         out.warnings.append(f"유사 공지 검색에 실패했습니다: {str(e)[:120]}")
-    ranked = rank_candidates(hits, parts, now=now)
+    sims = None
+    if similarity and hits:
+        try:
+            sims = similarity([h.source_url for h in hits])
+        except Exception as e:
+            out.warnings.append(f"의미 유사도를 구하지 못해 BM25 점수만 사용했습니다: {str(e)[:120]}")
+    ranked = rank_candidates(hits, parts, now=now, sims=sims)
     out.candidates = [c.brief(i + 1) for i, c in enumerate(ranked[:top_k])]
 
     if base_notice_url:

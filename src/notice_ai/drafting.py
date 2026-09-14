@@ -604,7 +604,7 @@ def draft_notice(
     now: datetime | None = None,
     top_k: int = 5,
     hybrid: bool = False,
-    semantic: Callable = semantic_hooks,
+    semantic: Callable | None = None,
 ) -> DraftOutcome:
     """전체 흐름. prepare_only=True면 후보·선택까지만(LLM 호출 없음).
     hybrid=True면 후보 검색·순위에 의미 검색(Bedrock 임베딩)을 섞는다. 실패하면 경고 후 BM25만."""
@@ -626,7 +626,7 @@ def draft_notice(
     knn = similarity = None
     if hybrid:
         try:
-            knn, similarity = semantic(out.query)
+            knn, similarity = (semantic or semantic_hooks)(out.query)   # 호출 시점에 찾는다(테스트에서 바꿔 끼움)
         except Exception as e:
             out.warnings.append(f"의미 검색을 쓰지 못해 BM25만 사용했습니다: {str(e)[:120]}")
     try:

@@ -1,0 +1,22 @@
+{
+  "SAND": ["샌드박스", "The Sandbox", "샌드박스(SAND)"],
+  "BB": ["바운스빗", "BounceBit"],
+  "MANTRA": ["만트라", "OM", "Mantra"],
+  "GALA": ["갈라", "Gala"],
+  "SUNDOG": ["썬도그", "SunDog"],
+  "ZIL": ["질리카", "Zilliqa"],
+  "NEXO": ["넥소", "Nexo"],
+  "ALGO": ["알고랜드", "Algorand"],
+  "ONT": ["온톨로지", "Ontology"],
+  "ELF": ["엘프", "aelf"],
+  "GAS": ["가스", "Gas"],
+  "MED": ["메디블록", "MediBloc"],
+  "HBAR": ["헤데라", "Hedera"],
+  "POL": ["폴리곤에코시스템토큰", "Polygon Ecosystem Token", "폴리곤"],
+  "STORJ": ["스토리지", "Storj"],
+  "TT": ["썬더코어", "ThunderCore"],
+  "JASMY": ["재스미코인", "JasmyCoin", "재스미"],
+  "ALLO": ["알로라", "Allora"],
+  "MEGA": ["메가이더", "MegaETH", "메가"],
+  "BNB": ["비앤비 스마트 체인", "BNB Smart Chain", "바이낸스코인"]
+}

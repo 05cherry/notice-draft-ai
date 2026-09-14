@@ -9,7 +9,8 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
     브라우저에서 http://localhost:8000/docs  ← API를 눌러볼 수 있는 자동 문서
 
 환경변수는 기존과 동일(OPENSEARCH_ENDPOINT / USER / PASSWORD).
-인증은 지금 단계에선 없음. 운영 전 접근 통제 추가 예정.
+공개 인터넷에 올릴 때는 API_TOKEN(공유 토큰)·ALLOWED_ORIGINS(프론트 주소)를 준다 — auth.py 참고.
+둘 다 없으면 로컬 개발처럼 아무 검사 없이 동작한다. 사용자별 인증은 아직 없다(#6).
 
 외부 서비스 실패는 {"detail": 안내 문구}로 돌려준다(프론트는 detail을 그대로 보여 준다):
     LLM 호출 실패 502 / 제한시간 초과 504 / LLM 설정 없음 503 · 검색 서버 연결 실패 503 · 환경변수 없음 503.
@@ -23,11 +24,11 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, Field
 
+from notice_ai.auth import install as install_auth
 from notice_ai.config import ConfigError
 from notice_ai.llm import LLMError
 from notice_ai.search import SEARCH_MAX_WINDOW, SearchHit, search_page
@@ -37,14 +38,9 @@ _WEB = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(title="notice-draft-ai API", version="0.1")
 
-# 프론트(브라우저)가 다른 포트/주소에서 호출할 수 있도록 CORS 허용.
-# 지금은 로컬 개발용으로 전부 허용. 운영 시 실제 프론트 주소로 좁힌다.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS(프론트가 다른 주소에서 부를 수 있게) + 공유 토큰 접근 통제.
+# 둘 다 환경변수로만 켜진다 — ALLOWED_ORIGINS 없으면 전부 허용, API_TOKEN 없으면 검사 없음(로컬 그대로).
+install_auth(app)
 
 _LLM_STATUS = {"timeout": 504, "config": 503}   # 나머지(rate_limit·auth·error)는 502
 

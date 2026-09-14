@@ -36,6 +36,7 @@ FastAPI (api.py) ── /search · /ui ──────┤
 src/notice_ai/
   api.py               FastAPI (프론트용)          cli.py            명령행(수집·색인·관리용)
   config.py            환경변수                    opensearch_client.py  OpenSearch 연결
+  auth.py              공유 토큰·CORS(배포용)
   scraper_client.py    cloudscraper + _next/data   collector.py      공지 수집 → 색인
   ingest.py            사내 CSV 색인               index_setup.py    인덱스 생성(Nori + kNN)
   embeddings.py        Bedrock 임베딩(Titan V2)    indexing.py       임베딩 백필
@@ -70,6 +71,7 @@ OPENSEARCH_PASSWORD=...
 OPENAI_API_KEY=...
 LLM_PROVIDER=openai
 # 선택: NOTICE_INDEX(기본 notices_v3) · OPENAI_MODEL(gpt-4o-mini) · EVAL_MODEL(gpt-4o)
+#       API_TOKEN·ALLOWED_ORIGINS(공개 주소에 올릴 때만, 아래 '배포' 참고)
 #       LLM_TIMEOUT(90초) · LLM_MAX_RETRIES(1) · AWS_REGION(ap-northeast-2) · BEDROCK_EMBED_MODEL
 ```
 Bedrock 임베딩은 `~/.aws/credentials`(`aws configure`)의 자격증명을 씁니다. 없어도 검색·초안은 BM25만으로
@@ -121,7 +123,42 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 공유 방법은 [#12](https://github.com/05cherry/notice-draft-ai/issues/12)에서 정합니다. 로컬에서는
 `py -m pytest tests -q`로 돌리며, 오프라인 테스트는 OpenSearch·GPT 없이 가짜로 동작합니다.
 
+## 배포 (Render 무료 플랜)
+
+`render.yaml`이 설계도입니다. Render 대시보드에서 **New > Blueprint**로 이 저장소를 고르면 값이 필요한
+환경변수를 하나씩 물어보고 그대로 만들어집니다. 프론트(`notice-draft-front`)도 같은 방식으로 정적
+사이트로 올립니다.
+
+**만들 때 넣어야 하는 값**
+
+| 환경변수 | 넣을 값 |
+|---|---|
+| `OPENSEARCH_ENDPOINT` · `OPENSEARCH_PASSWORD` | 쓰던 도메인 주소와 비밀번호 |
+| `OPENAI_API_KEY` | 초안 생성을 쓸 때 |
+| `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | Bedrock 임베딩을 쓸 때만. 비워 두면 BM25만 동작 |
+| `ALLOWED_ORIGINS` | 프론트 주소. 예) `https://notice-draft-front.onrender.com` |
+| `API_TOKEN` | Render가 무작위로 만들어 줍니다. 대시보드에서 확인해 프론트 연결 설정에 넣습니다 |
+
+**접근 통제** — `API_TOKEN`이 있으면 모든 요청에 토큰을 요구합니다(`auth.py`). 토큰 없이 통과하는 것은
+`/health`와 CORS 사전 요청뿐입니다. 토큰은 세 가지 방법으로 냅니다.
+
+```bash
+curl -H "X-API-Token: <토큰>" https://<백엔드>.onrender.com/types     # 프론트·스크립트
+curl -H "Authorization: Bearer <토큰>" ...                            # 같은 뜻
+```
+브라우저로 `/docs`나 `/ui`를 열 때는 `https://<백엔드>.onrender.com/docs?token=<토큰>`처럼 한 번만 붙이면
+쿠키에 담고 주소에서 토큰을 지웁니다. 환경변수를 안 주면 지금까지처럼 아무 검사 없이 돕니다(로컬 개발).
+
+**알아 둘 것**
+- 무료 플랜은 15분 동안 요청이 없으면 잠듭니다. 다음 첫 요청이 깨우는 데 1분 가까이 걸립니다.
+- `OPENSEARCH_ENDPOINT`는 Render에서 **인터넷으로 닿을 수 있어야** 합니다. VPC 전용이거나 접근 정책이
+  특정 IP만 허용하면 붙지 못합니다(무료 플랜은 고정 IP가 없습니다).
+- 무료인 것은 서버를 올려 두는 값뿐입니다. OpenSearch 도메인과 GPT 호출 비용은 그대로 나갑니다.
+- 공유 토큰은 팀이 나눠 갖는 열쇠 하나지 사용자별 인증이 아닙니다. 프론트에 넣는 순간 그 화면을 여는
+  사람은 누구나 토큰을 꺼내 볼 수 있습니다. 사용자별 인증은 [#6](https://github.com/05cherry/notice-draft-ai/issues/6)에서 합니다.
+
 ## 비용·보안 주의
 - OpenSearch 도메인은 켜 두는 동안 비용이 나갑니다.
 - `/draft`는 GPT를 2~4회 부릅니다. 평가(`evaluate`)를 켜면 비용이 약 두 배입니다.
-- 지금은 인증이 없고 CORS를 전부 허용합니다. 사내망에서만 쓰고, 운영 전에 접근 통제를 넣습니다([#6](https://github.com/05cherry/notice-draft-ai/issues/6)).
+- 공개 주소에 올릴 때는 `API_TOKEN`·`ALLOWED_ORIGINS`를 반드시 줍니다(위 배포 참고). 사용자별 인증은
+  아직 없습니다([#6](https://github.com/05cherry/notice-draft-ai/issues/6)).

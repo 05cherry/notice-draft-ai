@@ -2,6 +2,7 @@ opensearch-py>=2.6
 httpx>=0.27
 beautifulsoup4>=4.12
 boto3>=1.34
+openai>=3.8
 cloudscraper>=1.2
 fastapi>=0.110
 uvicorn[standard]>=0.29

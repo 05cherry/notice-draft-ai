@@ -14,9 +14,9 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from notice_ai.search import SearchHit, hybrid_search, search_notices
 
@@ -97,29 +97,157 @@ def search(
 
 
 # ---- 초안 생성 (기능 2) ----
+# 흐름(프론트가 매번 전체 값을 보내는 무상태 방식):
+#   GET /types → 카테고리(1~2개) 선택, subtype·질문 목록 확인
+#   POST /prepare → 유형 판별 + 누락 필드(질문) + 유사 공지 후보·자동 선택 (LLM 호출 없음)
+#   POST /draft → 초안 생성 + 검증 + 평가 + (필요 시 1회 수정) → 최종 초안
 class DraftRequest(BaseModel):
-    base_notice_url: str            # 사용자가 고른 기준 공지
-    answers: dict                   # 문답으로 모은 값 (coin_kr, ticker, action, reason, datetime ...)
-    category: str | None = None
+    categories: list[str] = Field(default_factory=list, description="카테고리 1~2개. 예) ['안내','입출금']")
+    category: str | None = Field(None, description="(구) 단일 카테고리. categories가 없을 때만 사용")
+    subtypes: dict[str, str] = Field(default_factory=dict, description="카테고리별 subtype 직접 지정(선택)")
+    text: str = Field("", description="작성하려는 공지 요청문(유형 판별·검색에 사용)")
+    inputs: dict = Field(default_factory=dict, description="문답값(파트 공통). coins/suspend_at/reason ...")
+    answers: dict = Field(default_factory=dict, description="(구) inputs 별칭. coin_kr/ticker/datetime 도 허용")
+    part_inputs: dict[str, dict] = Field(default_factory=dict,
+                                         description="카테고리별로만 다른 값. 예) {'거래지원종료': {'coins': [...]}}")
+    base_notice_url: str | None = Field(None, description="사용자가 직접 고른 참고 공지(없으면 자동 선택)")
+    evaluate: bool = Field(True, description="LLM 평가 포함(비용 발생). 코드 검증은 항상 수행")
+
+    def resolved_categories(self) -> list[str]:
+        return self.categories or ([self.category] if self.category else [])
+
+    def merged_inputs(self) -> dict:
+        return {**self.answers, **self.inputs}
 
 
 class DraftResponse(BaseModel):
-    draft: str
+    status: str                      # error | need_input | ready | ok | needs_review
+    parts: list[dict]
+    missing_fields: list[dict]
+    invalid_fields: list[dict]
+    errors: list[str]
     warnings: list[str]
-    base_url: str | None
-    referenced: list[str]
+    query: str
+    retrieval_note: str
+    candidates: list[dict]
+    selected_reference: dict | None
+    selection_reason: str
+    title_hint: str
+    first_draft: str
+    first_check: dict | None
+    first_evaluation: dict | None
+    revision_attempted: bool
+    revision_reasons: list[str]
+    revised: bool
+    final_draft: str
+    final_check: dict | None
+    final_evaluation: dict | None
+    needs_confirmation: list[str]
+    # (구) 응답 필드 호환
+    draft: str = ""
+    base_url: str | None = None
+    referenced: list[str] = []
+
+
+def _run(req: DraftRequest, prepare_only: bool) -> DraftResponse:
+    from notice_ai.drafting import draft_notice
+
+    o = draft_notice(
+        req.resolved_categories(), text=req.text, inputs=req.merged_inputs(),
+        part_inputs=req.part_inputs, subtypes=req.subtypes, base_notice_url=req.base_notice_url,
+        evaluate_draft=req.evaluate, prepare_only=prepare_only,
+    )
+    d = o.to_dict()
+    sel = o.selected_reference or {}
+    return DraftResponse(**d, draft=o.final_draft, base_url=sel.get("source_url"),
+                         referenced=[c["source_url"] for c in o.candidates])
+
+
+class NoticeOut(BaseModel):
+    source_url: str
+    title: str
+    categories: list[str]
+    published_at: str | None
+    tickers: list[str]
+    body: str                    # 수집한 원문 그대로
+    original_title: str          # 초안이 참고할 때 쓰는 최초 버전(재개 등 업데이트 꼬리표 제거)
+    original_body: str           # 본문 위에 덧붙은 업데이트 안내 제거
+    update_removed: list[str]    # 무엇을 뺐는지(없으면 빈 목록)
+    subtypes: dict[str, str]     # 카테고리별 판별 유형
+
+
+class CheckRequest(DraftRequest):
+    draft: str = Field("", description="검사할 초안 전체('제목:'/'본문:' 형식). title·body로 나눠 보내도 된다")
+    title: str = Field("", description="초안 제목(draft 대신 사용)")
+    body: str = Field("", description="초안 본문(draft 대신 사용)")
+
+    def draft_text(self) -> str:
+        return self.draft or f"제목: {self.title}\n본문:\n{self.body}"
+
+
+class CheckResponse(BaseModel):
+    status: str                  # error | ok | needs_review
+    parts: list[dict]
+    missing_fields: list[dict]
+    invalid_fields: list[dict]
+    errors: list[str]
+    warnings: list[str]
+    title: str = ""
+    body: str = ""
+    parsed: bool = False
+    issues: list[dict] = []      # {code, severity(error|warn), message}
+    needs_confirmation: list[str] = []
+
+
+@app.get("/notice", response_model=NoticeOut)
+def notice(url: str = Query(..., description="공지 source_url (/prepare·/draft 후보의 source_url)")) -> NoticeOut:
+    """공지 1건 조회 — 참고 후보를 눌렀을 때 본문 미리보기용."""
+    from notice_ai.drafting import get_notice_detail
+
+    d = get_notice_detail(url)
+    if d is None:
+        raise HTTPException(status_code=404, detail=f"공지를 찾을 수 없습니다: {url}")
+    return NoticeOut(**d)
+
+
+@app.post("/check", response_model=CheckResponse)
+def check(req: CheckRequest) -> CheckResponse:
+    """사용자가 고친 초안을 다시 검사(코드 검사만, LLM 호출 없음·즉시).
+
+    입력값(inputs 등)은 /draft 때와 같이 보낸다. 입력에 없는 날짜·코인·링크·조항, 입력값 누락,
+    요일 오류, 남은 자리표시자 등을 issues로 돌려준다. base_notice_url을 주면 참고 공지의 코인 혼입도 본다.
+    """
+    from notice_ai.drafting import check_notice
+
+    return CheckResponse(**check_notice(
+        req.resolved_categories(), draft=req.draft_text(), text=req.text, inputs=req.merged_inputs(),
+        part_inputs=req.part_inputs, subtypes=req.subtypes, base_notice_url=req.base_notice_url,
+    ))
+
+
+@app.get("/types")
+def types() -> list[dict]:
+    """카테고리별 subtype과 필수/선택 입력(질문 문구 포함). 프론트 문답 폼용."""
+    from notice_ai.notice_types import catalog
+
+    return catalog()
+
+
+@app.post("/prepare", response_model=DraftResponse)
+def prepare(req: DraftRequest) -> DraftResponse:
+    """유형 판별 + 누락 필드 + 유사 공지 후보(top-k)·자동 선택 이유. LLM 호출 없음.
+
+    missing_fields가 비고 후보를 확인했으면 같은 값(+원하면 base_notice_url)으로 /draft 호출.
+    """
+    return _run(req, prepare_only=True)
 
 
 @app.post("/draft", response_model=DraftResponse)
 def draft(req: DraftRequest) -> DraftResponse:
-    """기준 공지 + 문답값 → LLM 초안 생성 (기능 2).
+    """카테고리(1~2개) + 문답값 → 참고 공지 선택 → 초안 → 검증·평가 → (필요 시 1회 수정) → 최종 초안.
 
-    고위험 값(티커·날짜 등)은 프롬프트에 그대로 주입하고, 생성 후 반영됐는지 검증해
-    warnings로 돌려준다. LLM은 LLM_PROVIDER 환경변수로 선택(openai/local/company).
+    필수값이 모자라면 LLM을 부르지 않고 status=need_input + missing_fields를 돌려준다.
+    사실값(코인·날짜·링크·조항 등)이 입력과 어긋나면 final_check.issues에 error로 남는다.
+    LLM은 LLM_PROVIDER 환경변수로 선택(openai/local/company).
     """
-    from notice_ai.drafting import generate_draft
-
-    r = generate_draft(req.base_notice_url, req.answers, category=req.category)
-    return DraftResponse(
-        draft=r.draft, warnings=r.warnings, base_url=r.base_url, referenced=r.referenced
-    )
+    return _run(req, prepare_only=False)

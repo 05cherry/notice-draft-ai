@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from notice_ai import config, fusion
 from notice_ai.opensearch_client import get_client
@@ -25,6 +25,8 @@ class SearchHit:
     published_at: str | None
     score: float
     snippet: str = ""
+    body: str = ""          # 본문(raw_text). 초안 참고용. /search 응답에는 넣지 않는다.
+    tickers: tuple[str, ...] = ()
 
 
 def _filter_clauses(filters: dict) -> list[dict]:
@@ -32,6 +34,12 @@ def _filter_clauses(filters: dict) -> list[dict]:
     if filters.get("category"):
         # categories 배열에 이 값이 포함되면 매칭(대분류/소분류 구분 없이)
         clauses.append({"term": {"categories": filters["category"]}})
+    for cat in filters.get("categories") or []:
+        # 여러 개면 모두 포함한 공지만(AND). 예) 안내+입출금
+        clauses.append({"term": {"categories": cat}})
+    if filters.get("title_phrase"):
+        # 제목에 이 구절이 있는 공지만. 예) '유의촉구' → 같은 유형 최신 공지 모으기
+        clauses.append({"match_phrase": {"title": filters["title_phrase"]}})
     if filters.get("ticker"):
         clauses.append({"term": {"tickers": filters["ticker"]}})
     return clauses
@@ -47,28 +55,47 @@ def _hit(h: dict, score: float) -> SearchHit:
         published_at=s.get("published_at"),
         score=score,
         snippet=(hl[0] if hl else ""),
+        body=s.get("raw_text") or "",
+        tickers=tuple(s.get("tickers") or ()),
     )
 
 
-def bm25_search(query: str, filters: dict, size: int = 30) -> list[SearchHit]:
+def bm25_search(
+    query: str,
+    filters: dict,
+    size: int = 30,
+    *,
+    boost_phrases: tuple[str, ...] | list[str] = (),
+    sort: str | None = None,
+) -> list[SearchHit]:
+    """BM25(Nori). boost_phrases: 제목에 이 구절이 있으면 가점(유형 맞추기).
+    sort: None=관련도 / "score"=관련도, 동점이면 최신(비슷한 공지가 동점으로 많이 나온다)
+          / "recent"=최신순(점수는 그대로 계산)."""
     body = {
         "size": size,
+        "_source": {"excludes": ["embedding"]},
         "query": {
             "bool": {
                 "must": [
+                    # 분석기를 직접 지정하지 않는다: 필드의 search_analyzer(동의어 포함)가 쓰이게.
+                    # search_analyzer가 없는 옛 인덱스(notices)에서는 필드 analyzer(korean)가 그대로 쓰인다.
                     {"multi_match": {
                         "query": query,
                         "fields": ["title^3", "raw_text"],
-                        "analyzer": "korean",
                     }}
                 ],
                 "filter": _filter_clauses(filters),
+                "should": [{"match_phrase": {"title": {"query": p, "boost": 2.0}}} for p in boost_phrases],
             }
         },
         "highlight": {"fields": {"raw_text": {"fragment_size": 120, "number_of_fragments": 1}}},
     }
+    recent = {"published_at": {"order": "desc", "missing": "_last"}}
+    if sort in ("score", "recent"):
+        body["sort"] = ["_score", recent] if sort == "score" else [recent, "_score"]
+        body["track_scores"] = True   # sort를 주면 _score가 비는 것을 방지
     res = get_client().search(index=config.INDEX_NAME, body=body)
-    return [_hit(h, h["_score"]) for h in res["hits"]["hits"]]
+    return [_hit(h, h["_score"] or 0.0) for h in res["hits"]["hits"]]
 
 
 def vector_search(qvec: list[float], filters: dict, size: int = 30) -> list[SearchHit]:
@@ -136,7 +163,7 @@ def _rerank(query_text, ordered, by_id, limit):
 
 
 def _rescore(h: SearchHit, score: float) -> SearchHit:
-    return SearchHit(h.source_url, h.title, h.categories, h.published_at, score, h.snippet)
+    return replace(h, score=score)
 
 
 def search_notices(query: str, category_name: str | None = None, limit: int = 10) -> list[SearchHit]:

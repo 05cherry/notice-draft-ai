@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from notice_ai.search import SearchHit, search_page
+from notice_ai.search import SEARCH_MAX_WINDOW, SearchHit, search_page
 
 _WEB = Path(__file__).resolve().parent / "web"
 
@@ -96,7 +96,11 @@ def search(
     q = q.strip()
     if not q:
         raise HTTPException(status_code=422, detail="검색어를 입력하세요.")
-    r = search_page(q, category=category, page=page, size=limit or size, sort=sort, related=related)
+    size = limit or size
+    if page * size > SEARCH_MAX_WINDOW:
+        raise HTTPException(status_code=422,
+                            detail=f"앞쪽 {SEARCH_MAX_WINDOW:,}건까지만 볼 수 있습니다. 쪽 번호를 줄이세요.")
+    r = search_page(q, category=category, page=page, size=size, sort=sort, related=related)
     return SearchResponse(
         query=r.query, total=r.total, count=len(r.hits), page=r.page, size=r.size, sort=r.sort,
         min_score=r.min_score, categories=r.categories,

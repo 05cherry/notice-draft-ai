@@ -197,6 +197,8 @@ SEARCH_MIN_RATIO = 0.5
 # 벡터 유사도는 정답·오답 분포가 겹쳐 결과 건수를 정할 기준이 못 되므로 본 목록에는 섞지 않는다.
 RELATED_K = 5
 SEARCH_SORTS = {"relevance": ["_score", _RECENT], "recent": [_RECENT, "_score"]}
+# OpenSearch는 from+size가 index.max_result_window(기본 1만)를 넘으면 오류를 낸다(쪽 번호가 너무 크면 500이 났음)
+SEARCH_MAX_WINDOW = 10_000
 
 
 @dataclass

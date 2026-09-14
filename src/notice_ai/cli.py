@@ -3,7 +3,8 @@
   setup-index [--recreate] [--pos-stoptags narrow|default]
                              Nori+kNN 인덱스 생성(이름은 NOTICE_INDEX, 기본 notices_v3)
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
-  collect [--pages N]        공지 수집 → 색인
+  collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
+  ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
   search <검색어> [--category 이름] [--hybrid] [--rerank] [--limit N]
 """
@@ -12,6 +13,17 @@ from __future__ import annotations
 
 import argparse
 import logging
+
+
+def _embed_new() -> None:
+    """새로 색인한 공지(임베딩 없는 것)에 임베딩을 채운다. 없으면 유형 추정·비슷한 공지에서 빠진다.
+    Bedrock이 안 되면 수집 결과는 그대로 두고 안내만 한다."""
+    from notice_ai.indexing import embed_missing
+
+    try:
+        print(f"새 공지 임베딩 {embed_missing()}건")
+    except Exception as e:
+        print(f"임베딩은 건너뜀({type(e).__name__}). 나중에 `py -m notice_ai.cli embed`로 채우세요.")
 
 
 def main() -> None:
@@ -31,9 +43,11 @@ def main() -> None:
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
     pc.add_argument("--max-pages", type=int, default=None, help="카테고리당 최대 페이지(테스트용)")
     pc.add_argument("--no-body", action="store_true", help="본문 없이 목록만 색인(빠름)")
+    pc.add_argument("--no-embed", action="store_true", help="새 공지 임베딩 생략(나중에 embed로)")
 
     pi = sub.add_parser("ingest-csv")
     pi.add_argument("path", help="공지 CSV 경로")
+    pi.add_argument("--no-embed", action="store_true", help="새 공지 임베딩 생략(나중에 embed로)")
 
     pe = sub.add_parser("embed", help="embedding 없는 문서에 임베딩 채우기(Bedrock, 호출 비용)")
     pe.add_argument("--limit", type=int, default=None, help="이 건수까지만(시험용)")
@@ -64,10 +78,15 @@ def main() -> None:
         else:
             n = collect_all(max_pages=a.max_pages, fetch_body=fetch_body)
         print(f"신규 수집·색인 {n}건")
+        if n and not a.no_embed:
+            _embed_new()
     elif a.command == "ingest-csv":
         from notice_ai.ingest import ingest_csv
 
-        print(f"CSV 색인 {ingest_csv(a.path)}건")
+        n = ingest_csv(a.path)
+        print(f"CSV 색인 {n}건")
+        if n and not a.no_embed:
+            _embed_new()
     elif a.command == "embed":
         from notice_ai.indexing import embed_missing
 

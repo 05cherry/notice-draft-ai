@@ -320,18 +320,30 @@ def _style_example(ranked: list[Candidate], selected: Candidate) -> Candidate | 
     return max(newer, key=lambda c: c.hit.published_at or "", default=None)
 
 
-def _get_notice(source_url: str) -> dict | None:
+def _fetch_notice(source_url: str) -> dict | None:
+    """공지 1건. 없으면 None, 검색 서버 연결 오류 등은 그대로 올린다(/notice가 503으로 알림)."""
+    from opensearchpy.exceptions import NotFoundError
+
     from notice_ai.opensearch_client import get_client
 
     try:
         return get_client().get(index=config.INDEX_NAME, id=source_url)["_source"]
+    except NotFoundError:
+        return None
+
+
+def _get_notice(source_url: str) -> dict | None:
+    """초안 흐름용: 어떤 이유로든 못 가져오면 None(호출한 쪽이 경고·오류 문구로 처리)."""
+    try:
+        return _fetch_notice(source_url)
     except Exception:
         return None
 
 
 def get_notice_detail(url: str) -> dict | None:
-    """공지 1건: 원문 + 초안이 참고할 때 쓰는 최초 버전(업데이트 제외) + 제목·본문으로 판별한 유형."""
-    doc = _get_notice(url)
+    """공지 1건: 원문 + 초안이 참고할 때 쓰는 최초 버전(업데이트 제외) + 제목·본문으로 판별한 유형.
+    없으면 None. 검색 서버에 못 붙으면 예외(→ 503)."""
+    doc = _fetch_notice(url)
     if not doc:
         return None
     title, body = doc.get("title", ""), doc.get("raw_text") or ""
@@ -680,14 +692,19 @@ def draft_notice(
         # 사실 오류 + 평가 지적 + (수정하는 김에) 빠진 필수 항목 경고까지 넘긴다
         out.revision_reasons = ([i.message for i in chk.errors] + (ev.problems() if ev else [])
                                 + [i.message for i in chk.warnings if i.code == "section"])
-        draft2 = llm.generate(system, build_revision_prompt(user, draft, out.revision_reasons),
-                              max_tokens=GEN_MAX_TOKENS)
-        chk2 = check(draft2)
-        if len(chk2.errors) > len(chk.errors):
-            out.warnings.append("수정본의 사실 오류가 더 많아 1차 초안을 최종본으로 유지했습니다.")
-        else:
-            draft, chk, out.revised = draft2, chk2, True
-            ev = _evaluate(parts, draft, chk, selected, eval_llm) if evaluate_draft else None
+        try:
+            draft2 = llm.generate(system, build_revision_prompt(user, draft, out.revision_reasons),
+                                  max_tokens=GEN_MAX_TOKENS)
+        except Exception as e:   # 이미 만든(비용을 쓴) 1차 초안은 버리지 않는다
+            draft2 = None
+            out.warnings.append(f"수정 호출에 실패해 1차 초안을 최종본으로 유지했습니다: {str(e)[:120]}")
+        if draft2 is not None:
+            chk2 = check(draft2)
+            if len(chk2.errors) > len(chk.errors):
+                out.warnings.append("수정본의 사실 오류가 더 많아 1차 초안을 최종본으로 유지했습니다.")
+            else:
+                draft, chk, out.revised = draft2, chk2, True
+                ev = _evaluate(parts, draft, chk, selected, eval_llm) if evaluate_draft else None
 
     out.final_draft, out.final_check = draft, chk.to_dict()
     out.final_evaluation = ev.to_dict() if ev else None

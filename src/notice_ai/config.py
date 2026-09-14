@@ -5,9 +5,13 @@
     OPENSEARCH_USER       FGAC 마스터 사용자(기본 admin)
     OPENSEARCH_PASSWORD   FGAC 마스터 비밀번호
 
+선택(인덱스):
+    NOTICE_INDEX          기본 notices_v3 (소문자화 + 조사·어미 필터 + 검색 시 동의어).
+                          옛 인덱스로 되돌리려면 NOTICE_INDEX=notices (롤백용으로 보존 중)
+
 선택(벡터 검색을 켤 때만):
     AWS_REGION            기본 ap-northeast-2
-    BEDROCK_EMBED_MODEL   기본 cohere.embed-multilingual-v3
+    BEDROCK_EMBED_MODEL   기본 amazon.titan-embed-text-v2:0 (서울 리전 온디맨드. cohere v3는 서울에 없음)
     BEDROCK_LLM_MODEL     HyDE용 Claude 모델 ID(있을 때만 HyDE 사용)
     BEDROCK_RERANK_MODEL  기본 cohere.rerank-v3-5:0
 """
@@ -16,7 +20,7 @@ from __future__ import annotations
 
 import os
 
-INDEX_NAME = os.environ.get("NOTICE_INDEX", "notices")
+INDEX_NAME = os.environ.get("NOTICE_INDEX", "notices_v3")
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))  # Cohere multilingual v3
 AWS_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 

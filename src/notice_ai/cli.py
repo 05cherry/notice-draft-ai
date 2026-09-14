@@ -1,6 +1,8 @@
 """CLI: python -m notice_ai.cli <command>
 
-  setup-index [--recreate]   Nori+kNN 인덱스 생성
+  setup-index [--recreate] [--pos-stoptags narrow|default]
+                             Nori+kNN 인덱스 생성(이름은 NOTICE_INDEX, 기본 notices_v3)
+  reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
   collect [--pages N]        공지 수집 → 색인
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
   search <검색어> [--category 이름] [--hybrid] [--rerank] [--limit N]
@@ -19,6 +21,11 @@ def main() -> None:
 
     ps = sub.add_parser("setup-index")
     ps.add_argument("--recreate", action="store_true")
+    ps.add_argument("--pos-stoptags", choices=["narrow", "default"], default="narrow",
+                    help="품사 필터: narrow=조사·어미·하다접미사·기호만(기본, v3), default=Nori 기본(v2)")
+
+    pr = sub.add_parser("reindex", help="기존 인덱스 → 현재 NOTICE_INDEX로 복사(재수집 없이 매핑 변경)")
+    pr.add_argument("--source", required=True, help="원본 인덱스 이름(예: notices)")
 
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
@@ -28,7 +35,8 @@ def main() -> None:
     pi = sub.add_parser("ingest-csv")
     pi.add_argument("path", help="공지 CSV 경로")
 
-    sub.add_parser("embed")
+    pe = sub.add_parser("embed", help="embedding 없는 문서에 임베딩 채우기(Bedrock, 호출 비용)")
+    pe.add_argument("--limit", type=int, default=None, help="이 건수까지만(시험용)")
 
     px = sub.add_parser("search")
     px.add_argument("query")
@@ -40,9 +48,13 @@ def main() -> None:
     a = p.parse_args()
 
     if a.command == "setup-index":
-        from notice_ai.index_setup import create_index
+        from notice_ai.index_setup import NARROW_STOPTAGS, create_index
 
-        create_index(recreate=a.recreate)
+        create_index(recreate=a.recreate, pos_stoptags=NARROW_STOPTAGS if a.pos_stoptags == "narrow" else None)
+    elif a.command == "reindex":
+        from notice_ai.index_setup import reindex_from
+
+        print(reindex_from(a.source))
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
 
@@ -59,7 +71,7 @@ def main() -> None:
     elif a.command == "embed":
         from notice_ai.indexing import embed_missing
 
-        print(f"임베딩 {embed_missing()}건")
+        print(f"임베딩 {embed_missing(limit=a.limit)}건")
     elif a.command == "search":
         if a.hybrid:
             from notice_ai.search import hybrid_search

@@ -139,6 +139,24 @@
 - **평가 LLM이 점수를 "4"(문자열)로 줌 → 합계 과소 → 불필요한 수정**
   → evaluator가 int로 변환. 평가 실패(JSON 깨짐)면 평가를 근거로 수정하지 않는다.
 
+## API 오류 처리
+- **GPT·OpenSearch가 실패하면 프론트에 '서버에 연결할 수 없어요'만 뜸**
+  → 처리 안 된 예외는 500이 되는데, 이 응답은 CORS 미들웨어 바깥에서 만들어져 CORS 헤더가 없다. 브라우저는
+  본문을 못 읽고 연결 실패로 본다. api.py의 exception_handler로 LLMError(502/503/504)·OpenSearchException(503)·
+  ConfigError(503)를 {"detail": 안내 문구}로 돌려준다(이 응답은 CORS 헤더가 붙는다).
+- **수정 호출만 실패했는데 1차 초안까지 사라짐**
+  → 수정 generate가 try 밖이라 예외가 /draft 전체를 죽였다. 이제 1차 초안을 최종본으로 두고 경고.
+- **OpenAI 호출이 멈추면 /draft가 10분 가까이 붙잡힘**
+  → openai 라이브러리 기본 timeout은 600초·재시도 2회. LLM_TIMEOUT(기본 90초)·LLM_MAX_RETRIES(기본 1)로 줄였다.
+- **OpenSearch가 끊겼는데 /notice가 '공지를 찾을 수 없습니다'(404)**
+  → _get_notice가 모든 예외를 None으로 삼켰다. /notice는 _fetch_notice(없음=None, 연결 오류=예외→503)를 쓴다.
+- **오프라인 테스트가 실제 OpenSearch에 붙어 조용히 통과함**
+  → 셸에 OPENSEARCH_* 가 있으면 가짜를 빠뜨린 테스트도 실제 서버로 간다(/notice 테스트가 그랬다). conftest의
+  autouse fixture가 get_client·Bedrock 클라이언트를 막아 두어, 빠뜨리면 바로 실패한다.
+- **ingest-csv를 다시 돌리면 그 공지들의 임베딩이 지워짐**
+  → client.index가 문서를 통째로 덮어쓴다. collect·ingest-csv 끝에 새 공지 임베딩을 자동으로 채운다(--no-embed로 생략).
+  collect는 이미 있는 공지를 건너뛰어 해당 없음.
+
 ## 검색창(/search)
 - **'헤데라'를 검색하면 '데'·'라'만 있는 공지까지 78건이 걸림**
   → 사전에 없는 이름이 형태소 조각('헤'+'데')으로 쪼개지고, 기본 검색(OR)은 조각 하나만 맞아도 넣는다.

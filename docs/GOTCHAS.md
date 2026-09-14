@@ -179,3 +179,6 @@
   → Windows 파이썬의 경로 구분자는 `;`. `PYTHONPATH="src;tests"`.
 - **PowerShell에서 `python -c "..."` 안의 따옴표가 사라짐**(SyntaxError)
   → PowerShell 5.1이 네이티브 인자에서 따옴표를 벗긴다. Git Bash heredoc(`python - <<'EOF'`)을 쓴다.
+- **Git Bash에서 `gh issue create --title "/draft …"`의 제목이 `C:/Program Files/Git/draft …`로 바뀜**
+  → MSYS가 `/`로 시작하는 인자를 Windows 경로로 바꾼다(이슈 #4 제목이 이렇게 올라갔었음).
+  `MSYS_NO_PATHCONV=1 gh …`로 실행하거나, 긴 텍스트는 `--body-file`처럼 파일로 넘긴다.

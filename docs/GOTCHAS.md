@@ -153,6 +153,11 @@
   → 코드가 바뀌어 프로세스가 다시 뜨면 Bedrock 클라이언트(boto3)를 새로 만든다. 이후는 0.3~0.6초.
 - **발췌에서 '헤'만 강조되거나 '헤 데'로 끊겨 보임**
   → 형태소 조각 단위로 강조된다. 붙어 있는 `</em><em>`은 합쳐 준다(search._snippet). 완전한 해결은 아님.
+- **쪽 번호를 크게 주면(page=2000) /search가 500**
+  → OpenSearch는 from+size가 max_result_window(기본 1만)를 넘으면 오류. API에서 page×size > 1만이면 422로 막는다.
+- **/ui 첫 화면(검색 전)에 정렬 버튼·이전/다음 버튼이 보임**
+  → `.bar`·`.pager`에 준 `display:flex`가 `hidden` 속성(브라우저 기본 display:none)을 덮어썼다.
+  `[hidden]{display:none !important}` 한 줄로 해결. hidden으로 숨기는 요소에 display를 줄 때 주의.
 
 ## 검색 / 참고 공지 선택
 - **BM25 상위가 오래된 공지로 채워짐(에어드랍 1위가 2023년 등)**

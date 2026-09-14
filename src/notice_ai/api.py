@@ -10,20 +10,29 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
 
 환경변수는 기존과 동일(OPENSEARCH_ENDPOINT / USER / PASSWORD).
 인증은 지금 단계에선 없음. 운영 전 접근 통제 추가 예정.
+
+외부 서비스 실패는 {"detail": 안내 문구}로 돌려준다(프론트는 detail을 그대로 보여 준다):
+    LLM 호출 실패 502 / 제한시간 초과 504 / LLM 설정 없음 503 · 검색 서버 연결 실패 503 · 환경변수 없음 503.
+처리 안 된 예외(500)는 CORS 헤더가 붙지 않아 브라우저에선 '연결 실패'로만 보이므로 여기서 잡는다.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, Field
 
+from notice_ai.config import ConfigError
+from notice_ai.llm import LLMError
 from notice_ai.search import SEARCH_MAX_WINDOW, SearchHit, search_page
 
+logger = logging.getLogger(__name__)
 _WEB = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(title="notice-draft-ai API", version="0.1")
@@ -36,6 +45,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_LLM_STATUS = {"timeout": 504, "config": 503}   # 나머지(rate_limit·auth·error)는 502
+
+
+@app.exception_handler(LLMError)
+def _llm_failed(request: Request, exc: LLMError) -> JSONResponse:
+    logger.warning("LLM 실패(%s) %s: %s", exc.kind, request.url.path, exc)
+    return JSONResponse(status_code=_LLM_STATUS.get(exc.kind, 502),
+                        content={"detail": f"초안 생성 AI 호출 실패 — {exc}", "kind": exc.kind})
+
+
+@app.exception_handler(OpenSearchException)
+def _search_down(request: Request, exc: OpenSearchException) -> JSONResponse:
+    logger.warning("OpenSearch 실패 %s: %r", request.url.path, exc)
+    return JSONResponse(status_code=503, content={
+        "detail": f"검색 서버(OpenSearch)에 연결하지 못했습니다({type(exc).__name__}). 잠시 뒤 다시 시도하세요.",
+        "kind": "search_unavailable"})
+
+
+@app.exception_handler(ConfigError)
+def _not_configured(request: Request, exc: ConfigError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": f"서버 설정이 빠졌습니다: {exc}", "kind": "config"})
 
 
 # ---- 응답 스키마 (프론트가 받게 될 JSON 형태) ----
@@ -73,9 +104,14 @@ class SearchResponse(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict:
-    """서버가 살아있는지 확인용."""
-    return {"status": "ok"}
+def health(deep: bool = Query(False, description="검색 서버·임베딩·LLM 설정까지 확인(느림, LLM은 부르지 않음)")):
+    """서버가 살아있는지 확인용. deep=true면 의존 서비스 상태(status: ok/degraded/down, down이면 503)."""
+    if not deep:
+        return {"status": "ok"}
+    from notice_ai.health import check
+
+    r = check()
+    return JSONResponse(status_code=503 if r["status"] == "down" else 200, content=r)
 
 
 @app.get("/search", response_model=SearchResponse)

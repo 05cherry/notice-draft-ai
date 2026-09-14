@@ -25,10 +25,14 @@ EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))  # Cohere multilingual v3
 AWS_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
 
+class ConfigError(RuntimeError):
+    """필수 환경변수가 없음. API는 503과 안내 문구로 돌려준다."""
+
+
 def endpoint() -> str:
     ep = os.environ.get("OPENSEARCH_ENDPOINT")
     if not ep:
-        raise RuntimeError("OPENSEARCH_ENDPOINT 환경변수가 필요합니다.")
+        raise ConfigError("OPENSEARCH_ENDPOINT 환경변수가 필요합니다.")
     return ep.rstrip("/")
 
 
@@ -36,7 +40,7 @@ def basic_auth() -> tuple[str, str]:
     user = os.environ.get("OPENSEARCH_USER", "admin")
     pw = os.environ.get("OPENSEARCH_PASSWORD")
     if not pw:
-        raise RuntimeError("OPENSEARCH_PASSWORD 환경변수가 필요합니다.")
+        raise ConfigError("OPENSEARCH_PASSWORD 환경변수가 필요합니다.")
     return user, pw
 
 

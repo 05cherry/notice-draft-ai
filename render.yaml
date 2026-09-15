@@ -1,0 +1,50 @@
+# Render 배포 설계도(Blueprint) — 대시보드에서 New > Blueprint 로 이 저장소를 고르면 그대로 만들어진다.
+# 무료 플랜이라 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 깨우는 데 1분 가까이 걸린다.
+# 값이 필요한 환경변수(sync: false)는 만들 때 Render가 하나씩 물어본다. 여기에 비밀을 적지 않는다.
+services:
+  - type: web
+    name: notice-draft-ai
+    runtime: python
+    plan: free
+    region: singapore          # OpenSearch 도메인이 ap-northeast-2면 여기가 가장 가깝다
+    branch: master
+    healthCheckPath: /health   # auth.py가 토큰 없이 통과시키는 유일한 경로
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn notice_ai.api:app --app-dir src --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.7"
+
+      # --- 접근 통제 ---
+      # 팀이 나눠 갖는 열쇠 하나. Render가 무작위로 만들어 주고, 대시보드에서 확인해 프론트에 넣는다.
+      - key: API_TOKEN
+        generateValue: true
+      # 프론트 주소만 남긴다. 예) https://notice-draft-front.onrender.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # --- 검색 서버(필수) ---
+      # 이 주소는 Render에서 인터넷으로 닿을 수 있어야 한다. VPC 전용이거나 접근 정책이
+      # 특정 IP만 허용하면 붙지 못한다(무료 플랜은 고정 IP가 없다).
+      - key: OPENSEARCH_ENDPOINT
+        sync: false
+      - key: OPENSEARCH_USER
+        value: admin
+      - key: OPENSEARCH_PASSWORD
+        sync: false
+
+      # --- 초안 AI(초안 생성을 쓸 때 필수) ---
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # --- 임베딩(선택) ---
+      # 없으면 검색·초안은 BM25로 동작하고 비슷한 공지·유형 추정만 빠진다.
+      # Render에는 ~/.aws/credentials가 없으므로 키를 환경변수로 준다.
+      - key: AWS_REGION
+        value: ap-northeast-2
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false

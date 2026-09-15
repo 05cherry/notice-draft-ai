@@ -133,7 +133,7 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 
 | 환경변수 | 넣을 값 |
 |---|---|
-| `OPENSEARCH_ENDPOINT` · `OPENSEARCH_PASSWORD` | 쓰던 도메인 주소와 비밀번호 |
+| `OPENSEARCH_ENDPOINT` · `OPENSEARCH_USER` · `OPENSEARCH_PASSWORD` | 쓰던 도메인 주소와 아이디·비밀번호 |
 | `OPENAI_API_KEY` | 초안 생성을 쓸 때 |
 | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | Bedrock 임베딩을 쓸 때만. 비워 두면 BM25만 동작 |
 | `ALLOWED_ORIGINS` | 프론트 주소. 예) `https://notice-draft-front.onrender.com` |
@@ -148,6 +148,11 @@ curl -H "Authorization: Bearer <토큰>" ...                            # 같은
 ```
 브라우저로 `/docs`나 `/ui`를 열 때는 `https://<백엔드>.onrender.com/docs?token=<토큰>`처럼 한 번만 붙이면
 쿠키에 담고 주소에서 토큰을 지웁니다. 환경변수를 안 주면 지금까지처럼 아무 검사 없이 돕니다(로컬 개발).
+
+`render.yaml`에 `value:`로 적은 값은 **블루프린트가 계속 강제합니다.** 대시보드에서 고쳐도 다음 동기화 때
+되돌아갑니다. 그래서 환경마다 다른 값(계정·자격증명)은 `sync: false`로 두거나, 코드에 기본값이 있으면
+아예 적지 않습니다. `LLM_PROVIDER`·`AWS_REGION`·`NOTICE_INDEX`처럼 기본값이 있는 것은 바꿔야 할 때
+대시보드에서 직접 더하면 되고, 블루프린트가 되돌려 놓지 않습니다.
 
 **알아 둘 것**
 - 무료 플랜은 15분 동안 요청이 없으면 잠듭니다. 다음 첫 요청이 깨우는 데 1분 가까이 걸립니다.

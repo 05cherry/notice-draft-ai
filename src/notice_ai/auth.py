@@ -10,6 +10,7 @@
 
 토큰 없이 통과하는 것은 둘뿐이다. `/health`(Render가 서버 생존을 확인하는 경로)와
 CORS 사전 요청(OPTIONS). 사전 요청에는 헤더를 붙일 수 없어서 막으면 브라우저가 본 요청을 아예 안 보낸다.
+`/health?deep=true`는 인덱스 이름·공지 건수·쓰는 LLM 모델을 알려 주므로 토큰을 받는다.
 
 `ALLOWED_ORIGINS`(쉼표로 구분)로 CORS를 프론트 주소만 남기게 좁힌다. 기본은 전부 허용(`*`).
 
@@ -28,7 +29,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 COOKIE_NAME = "notice_api_token"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 30      # 30일
-OPEN_PATHS = frozenset({"/health"})     # 토큰 없이 통과(Render 상태 확인)
+_TRUTHY = frozenset({"1", "true", "yes", "on", "t", "y"})
 
 _UNAUTHORIZED = {
     "detail": "접근 토큰이 필요합니다. X-API-Token 헤더에 토큰을 넣어 주세요"
@@ -41,6 +42,33 @@ def allowed_origins() -> list[str]:
     """CORS로 허용할 프론트 주소. 기본은 전부 허용."""
     raw = os.environ.get("ALLOWED_ORIGINS", "*")
     return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()] or ["*"]
+
+
+def _open(request: Request) -> bool:
+    """토큰 없이 통과시킬 요청인가.
+
+    CORS 사전 요청과 Render의 상태 확인(`/health`)뿐이다. 같은 경로라도 `?deep=true`는
+    내부 사정(인덱스 이름·공지 건수·LLM 모델)을 알려 주므로 토큰을 받는다.
+    """
+    if request.method == "OPTIONS":
+        return True
+    if request.url.path != "/health":
+        return False
+    return request.query_params.get("deep", "").strip().lower() not in _TRUTHY
+
+
+def _https(request: Request) -> bool:
+    """브라우저가 HTTPS로 왔는가 — 쿠키에 Secure를 붙일지 정한다.
+
+    Render는 TLS를 앞단에서 끝내고 앱에는 평문으로 넘긴다. uvicorn은 그 앞단이
+    신뢰 목록(`--forwarded-allow-ips`)에 없으면 X-Forwarded-Proto를 무시해서 scheme이 http로 보인다.
+    그대로 두면 토큰 쿠키에 Secure가 안 붙어 평문으로도 새어 나가므로 헤더를 직접 본다.
+    (이 헤더를 꾸며도 쿠키가 더 엄격해질 뿐이라 손해 볼 일은 없다.)
+    """
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "")
+    return proto.split(",")[0].strip().lower() == "https"
 
 
 def _presented(request: Request) -> str | None:
@@ -64,15 +92,18 @@ def install(app: FastAPI) -> None:
     if token:
         @app.middleware("http")
         async def require_token(request: Request, call_next):
-            if request.method == "OPTIONS" or request.url.path in OPEN_PATHS:
+            if _open(request):
                 return await call_next(request)
 
             # 브라우저로 연 경우: ?token=... 을 쿠키로 옮기고 주소에서 지운다
             # (주소창·접속 기록·리퍼러에 토큰이 남지 않게).
             if (q := request.query_params.get("token")) and secrets.compare_digest(q, token):
-                res = RedirectResponse(str(request.url.remove_query_params("token")), status_code=303)
+                # 보낼 곳은 경로만 적는다. 절대 주소로 적으면 프록시 뒤에서 scheme이 http로 보여
+                # http:// 로 돌려보내고, 브라우저가 그 평문 요청에 토큰 쿠키를 실어 보낸다.
+                rest = request.url.remove_query_params("token")
+                res = RedirectResponse(rest.path + (f"?{rest.query}" if rest.query else ""), status_code=303)
                 res.set_cookie(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE, httponly=True,
-                               samesite="lax", secure=request.url.scheme == "https")
+                               samesite="lax", secure=_https(request))
                 return res
 
             given = _presented(request)

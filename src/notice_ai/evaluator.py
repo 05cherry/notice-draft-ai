@@ -17,7 +17,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import date
 
-from notice_ai.llm import LLM, OpenAICompatLLM
+from notice_ai.llm import LLM, OpenAICompatLLM, api_key
 
 _CRITERIA = [
     ("format", "형식 준수: 공지다운 항목 구성과 [필수 항목]을 갖췄는가"),
@@ -76,21 +76,25 @@ class Evaluation:
 
 
 def _eval_llm() -> OpenAICompatLLM:
-    """평가용 LLM. 기본은 OpenAI + 더 똑똑한 모델(gpt-4o)."""
-    provider = os.environ.get("EVAL_PROVIDER", os.environ.get("LLM_PROVIDER", "openai"))
+    """평가용 LLM. 기본은 OpenAI + 더 똑똑한 모델(gpt-4o).
+
+    생성용과 키는 같지만 모델이 다르다. 키에 gpt-4o 권한만 없으면 생성은 되고 평가만
+    403으로 죽으므로(평가 실패는 삼켜져 '평가불가'로만 보인다), EVAL_MODEL을 안내에 남긴다.
+    """
+    provider = os.environ.get("EVAL_PROVIDER", os.environ.get("LLM_PROVIDER", "openai")).lower()
     if provider == "openai":
-        key = os.environ["OPENAI_API_KEY"]
         model = os.environ.get("EVAL_MODEL", "gpt-4o")
-        return OpenAICompatLLM(key, None, model)
+        return OpenAICompatLLM(api_key("openai"), None, model, key_env="OPENAI_API_KEY")
     if provider == "local":
         base = os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:8001/v1")
         model = os.environ.get("EVAL_MODEL", os.environ.get("LOCAL_LLM_MODEL", "qwen2.5"))
-        return OpenAICompatLLM(os.environ.get("LOCAL_LLM_KEY", "sk-local"), base, model)
+        return OpenAICompatLLM(api_key("local", default="sk-local"), base, model, key_env="LOCAL_LLM_KEY")
     # company 등
     return OpenAICompatLLM(
-        os.environ.get("COMPANY_LLM_KEY", ""),
+        api_key("company"),
         os.environ.get("COMPANY_LLM_BASE_URL"),
         os.environ.get("EVAL_MODEL", "gpt-4o"),
+        key_env="COMPANY_LLM_KEY",
     )
 
 

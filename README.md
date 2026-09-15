@@ -154,6 +154,23 @@ curl -H "Authorization: Bearer <토큰>" ...                            # 같은
 아예 적지 않습니다. `LLM_PROVIDER`·`AWS_REGION`·`NOTICE_INDEX`처럼 기본값이 있는 것은 바꿔야 할 때
 대시보드에서 직접 더하면 되고, 블루프린트가 되돌려 놓지 않습니다.
 
+**초안 생성이 502로 실패할 때**
+
+`{"detail": "초안 생성 AI 호출 실패 — …", "kind": "auth"}`는 OpenAI가 키를 거부했다는 뜻입니다.
+`/health?deep=true`의 `llm`을 먼저 봅니다(토큰 비용 없이 키가 실제로 통하는지 확인합니다).
+
+| `llm` 응답 | 뜻 | 할 일 |
+|---|---|---|
+| `configured: false` | 키가 아예 없음 | Render 환경변수에 `OPENAI_API_KEY` 추가 |
+| `key_ok: false`, 401 `invalid_api_key` | 키가 거부됨 | 값 확인. 따옴표·공백이 섞였거나 폐기된 키. 새로 발급했다면 **재배포**해야 반영됨 |
+| `key_ok: true`인데 `/draft`만 403 | 키는 살아 있음 | 그 키에 해당 모델 권한이 없음. OpenAI 프로젝트의 모델 권한과 `OPENAI_MODEL`(기본 `gpt-4o-mini`)·`EVAL_MODEL`(기본 `gpt-4o`) 확인 |
+| `key_ok: null` | 확인 못 함 | 네트워크 문제일 수 있음. 서버 로그의 `LLM 실패(...)` 줄을 봅니다 |
+
+키가 맞는지는 이 명령으로도 바로 확인할 수 있습니다(요금 없음).
+```bash
+curl https://api.openai.com/v1/models -H "Authorization: Bearer <키>"
+```
+
 **알아 둘 것**
 - 무료 플랜은 15분 동안 요청이 없으면 잠듭니다. 다음 첫 요청이 깨우는 데 1분 가까이 걸립니다.
 - `OPENSEARCH_ENDPOINT`는 Render에서 **인터넷으로 닿을 수 있어야** 합니다. VPC 전용이거나 접근 정책이

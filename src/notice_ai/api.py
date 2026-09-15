@@ -47,7 +47,9 @@ _LLM_STATUS = {"timeout": 504, "config": 503}   # 나머지(rate_limit·auth·er
 
 @app.exception_handler(LLMError)
 def _llm_failed(request: Request, exc: LLMError) -> JSONResponse:
-    logger.warning("LLM 실패(%s) %s: %s", exc.kind, request.url.path, exc)
+    # 원래 예외(OpenAI가 준 상태코드·오류코드)까지 로그에 남긴다 — 응답 문구만으로는
+    # 키 문제인지 모델 권한 문제인지 서버 로그에서 되짚을 수 없었다.
+    logger.warning("LLM 실패(%s) %s: %s", exc.kind, request.url.path, exc, exc_info=exc.__cause__ or exc)
     return JSONResponse(status_code=_LLM_STATUS.get(exc.kind, 502),
                         content={"detail": f"초안 생성 AI 호출 실패 — {exc}", "kind": exc.kind})
 

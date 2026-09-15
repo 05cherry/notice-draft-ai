@@ -10,7 +10,9 @@ services:
     branch: master
     healthCheckPath: /health   # auth.py가 토큰 없이 통과시키는 유일한 경로
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn notice_ai.api:app --app-dir src --host 0.0.0.0 --port $PORT
+    # --forwarded-allow-ips: Render가 TLS를 앞단에서 끝내고 평문으로 넘기므로, 그 앞단의
+    # X-Forwarded-* 를 믿어야 요청이 https로 온 걸 안다(컨테이너는 이 앞단으로만 닿는다).
+    startCommand: uvicorn notice_ai.api:app --app-dir src --host 0.0.0.0 --port $PORT --forwarded-allow-ips='*'
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.7"

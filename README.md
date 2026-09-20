@@ -13,6 +13,7 @@
 | 공지 검색창 — BM25(Nori) + 1위 점수 50% 컷, 카테고리별 건수, 쪽 나눔, 비슷한 공지(의미 검색) | ✅ |
 | 초안 생성 — 입출금·공시·거래유의·안내, 카테고리 1~2개 | ✅ |
 | 유형 판별 — 요청문 규칙 + 규칙이 못 정하면 비슷한 공지로 추정(벡터) | ✅ |
+| 요청문에서 입력값 자동 추출 → 입력칸 미리 채우기 ([#7](https://github.com/05cherry/notice-draft-ai/issues/7)) | ✅ |
 | 사실 검증(코드) + GPT 평가 → 기준 미달이면 1회 수정 | ✅ |
 | 맞춤법 검사 | ⬜ [#5](https://github.com/05cherry/notice-draft-ai/issues/5) |
 | 프론트 | 🔶 별도 폴더 `notice-draft-front`의 React 프로토타입 ([#3](https://github.com/05cherry/notice-draft-ai/issues/3)) |
@@ -28,6 +29,7 @@
                                  (Nori BM25 + kNN)
                                         ▲
 FastAPI (api.py) ── /search · /ui ──────┤
+   ├─ /extract ─────────────────────▶ 요청문에서 입력값 뽑기(제안, 사용자 확인 후 inputs 로 들어옴)
    └─ /prepare · /draft · /check ──▶ drafting: 유형 판별 → 후보 검색·참고 공지 선택 → 프롬프트
                                         → LLM(openai / local / company) → factcheck(코드 검증) + evaluator(GPT 평가)
 ```
@@ -44,6 +46,7 @@ src/notice_ai/
   notice_types.py      유형 스펙(카테고리 > 유형·필드·섹션·규칙) + 라우팅 + 입력 정규화·검증
   factcheck.py         참고 공지 사실값 가리기 + 초안 사실 검증
   drafting.py          초안 파이프라인(유형 추정·후보·선택·프롬프트·생성·수정)
+  extract.py           요청문 → 입력값 뽑기(제안). /draft 는 이 값을 직접 쓰지 않는다
   evaluator.py         GPT 평가(5개 기준, 수정 여부 판정)
   llm.py               LLM 인터페이스(openai / local / company), 제한시간·오류 종류
   health.py            /health?deep=true 상태 점검
@@ -101,6 +104,7 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 | `GET /search?q=&category=&page=&size=&sort=` | 공지 검색창. 1위 점수 50% 미만 제외, `total`·카테고리별 건수·`related`(비슷한 공지) | 없음 |
 | `GET /ui` | 간단한 검색 화면 | 없음 |
 | `GET /types` | 카테고리별 유형과 필수·선택 입력(질문 문구 포함) | 없음 |
+| `POST /extract` | 요청문에서 입력값을 뽑아 입력칸 채우기용 제안. 초안에 바로 쓰이지 않음 | 1회 |
 | `POST /prepare` | 유형 판별(추정 포함) + 빠진 입력 질문 + 참고 공지 후보 5건·자동 선택 이유 | 없음 |
 | `POST /draft` | 초안 생성 → 코드 검증 + GPT 평가 → 필요 시 1회 수정 → 최종 초안 | 2~4회 |
 | `POST /check` | 사용자가 고친 초안을 코드로만 다시 검사 | 없음 |
@@ -109,6 +113,8 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.
+- `/extract`는 **제안만** 돌려줍니다(`fields`). `/draft`는 사용자가 확인해 보낸 `inputs`만 보므로, 추출이
+  틀려도 초안의 사실값은 오염되지 않습니다. 형식 검사를 통과 못 한 값은 `rejected`로 내려가고 칸은 빈 채로 둡니다.
 - 외부 서비스가 실패하면 `{"detail": 안내 문구, "kind"}`로 답합니다(GPT 502/504, 검색 서버 503 등).
 
 단계별 규칙, 기준값, 유형 표, 참고 공지 선택, 검증 항목, 오류 응답, 검색창 규칙은

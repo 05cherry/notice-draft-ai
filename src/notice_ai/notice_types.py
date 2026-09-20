@@ -448,6 +448,15 @@ def _invalid(name: str, value) -> str | None:
     return None
 
 
+def field_problem(name: str, value) -> str | None:
+    """입력값이 그 필드의 형식에 맞는지. 맞으면 None, 아니면 사람이 읽을 문제 설명.
+
+    resolve() 안에서만 쓰던 검사를 밖에서도 쓰려고 연 것이다. extract.py가 LLM이 뽑은 값을
+    사람이 직접 친 값과 **같은 기준으로** 거르는 데 쓴다(뽑은 값이라고 느슨하게 보지 않는다).
+    """
+    return _invalid(name, value)
+
+
 # ── 파트 해석(카테고리 1~2개) ─────────────────────────────────────────────
 @dataclass
 class Part:

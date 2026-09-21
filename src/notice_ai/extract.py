@@ -31,6 +31,7 @@ from notice_ai.notice_types import (
     is_temporal,
     is_unknown,
     normalize_inputs,
+    now_kst,
     resolve,
 )
 
@@ -173,7 +174,11 @@ def extract_inputs(
     llm: LLM | None = None,
     now: datetime | None = None,
 ) -> ExtractOutcome:
-    """요청문에서 이 유형의 입력값을 뽑는다. LLM 1회. 실패해도 예외 대신 빈 결과 + 경고."""
+    """요청문에서 이 유형의 입력값을 뽑는다. LLM 1회. 실패해도 예외 대신 빈 결과 + 경고.
+
+    now 를 주지 않으면 KST 기준 지금을 쓴다. 요청문의 '내일'·'오늘'을 푸는 기준이라
+    서버가 UTC로 돌면 하루가 어긋난다(now_kst 참고).
+    """
     out = ExtractOutcome()
     res = resolve(categories, text=text, subtypes=subtypes)
     out.parts = [p.to_dict() for p in res.parts]
@@ -188,7 +193,7 @@ def extract_inputs(
 
     lines, _ = _field_lines(res.parts)
     out.asked = [ln.split()[1] for ln in lines]
-    system, user = build_prompt(res.parts, text, now or datetime.now())
+    system, user = build_prompt(res.parts, text, now or now_kst())
     answer = (llm or get_llm()).generate(system, user, max_tokens=MAX_TOKENS)
 
     raw = parse_json(answer)

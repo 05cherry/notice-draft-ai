@@ -33,6 +33,7 @@ from notice_ai.notice_types import (
     field_label,
     get_type,
     is_empty,
+    now_kst,
     resolve,
     routing_text,
     title_hint,
@@ -619,7 +620,7 @@ def draft_notice(
         return out
     parts = res.parts
     out.title_hint = title_hint(parts)
-    now = now or datetime.now()
+    now = now or now_kst()      # 공지 시각은 KST. 서버가 UTC면 하루가 어긋난다
 
     # 후보는 필수값이 모자라도 보여준다(문답 중에 참고할 수 있게)
     out.query = build_query(parts, text)

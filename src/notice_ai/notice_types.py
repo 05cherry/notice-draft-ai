@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 MAX_CATEGORIES = 2
@@ -27,6 +27,22 @@ _CATEGORIES_PATH = Path(__file__).resolve().parents[2] / "data" / "categories.js
 UNKNOWN_VALUES = {"미정", "미확정", "추후 공지", "추후공지", "추후 안내", "tbd"}
 
 _WEEKDAYS = "월화수목금토일"
+
+# 공지의 모든 시각은 KST다(render_datetime 이 '(KST)'를 붙인다).
+# 한국은 1988년 이후 서머타임이 없어 UTC+9 고정이므로 tzdata 없이 계산한다.
+KST = timezone(timedelta(hours=9))
+
+
+def now_kst() -> datetime:
+    """지금 시각(KST). 시간대 정보는 떼고 돌려준다.
+
+    서버는 보통 UTC로 돈다(Render 포함). datetime.now() 를 그대로 쓰면 KST 자정부터
+    오전 9시까지 9시간 동안 '오늘'이 하루 어긋나, 요청문의 '오늘'·'내일'이 틀린 날짜로 풀린다.
+    실제로 UTC 9/21 21:56(= KST 9/22 06:56)에 '내일'이 9/21로 나왔다.
+
+    비교 대상(parse_datetime 결과 등)이 전부 naive 이므로 tzinfo 를 떼어 맞춘다.
+    """
+    return datetime.now(KST).replace(tzinfo=None)
 
 
 # ── 필드 ────────────────────────────────────────────────────────────────

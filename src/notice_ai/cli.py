@@ -7,6 +7,7 @@
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
   search <검색어> [--category 이름] [--hybrid] [--rerank] [--limit N]
+  coins [검색어] [--limit N]  빗썸 거래 대상 목록 조회(캐시가 비어 있으면 한 번 받아 온다)
 """
 
 from __future__ import annotations
@@ -52,6 +53,10 @@ def main() -> None:
     pe = sub.add_parser("embed", help="embedding 없는 문서에 임베딩 채우기(Bedrock, 호출 비용)")
     pe.add_argument("--limit", type=int, default=None, help="이 건수까지만(시험용)")
 
+    pn = sub.add_parser("coins", help="빗썸 거래 대상 목록(티커·한글명) 조회·갱신")
+    pn.add_argument("query", nargs="?", default="", help="티커·한글명·영문명 일부. 비우면 전체")
+    pn.add_argument("--limit", type=int, default=30)
+
     px = sub.add_parser("search")
     px.add_argument("query")
     px.add_argument("--category", default=None)
@@ -91,6 +96,19 @@ def main() -> None:
         from notice_ai.indexing import embed_missing
 
         print(f"임베딩 {embed_missing(limit=a.limit)}건")
+    elif a.command == "coins":
+        from notice_ai import coins
+
+        # CLI는 백그라운드 루프가 없으니(그건 api.py의 lifespan) 여기서 직접 한 번 받는다.
+        r = coins.refresh()
+        if not r["ok"]:
+            print(f"빗썸 호출 실패 — {r['error']}")
+        found = coins.search(a.query, limit=a.limit)
+        print(f"전체 {r['count']}건 중 {len(found)}건")
+        for c in found:
+            marks = "/".join(c.markets) or "-"
+            print(f"  {c.ticker:<10} {c.name or '(이름없음)':<16} {c.english:<24} {marks}"
+                  + ("  ⚠유의" if c.warning else ""))
     elif a.command == "search":
         if a.hybrid:
             from notice_ai.search import hybrid_search

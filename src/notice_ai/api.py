@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -30,6 +31,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, Field
 
+from notice_ai import coins as coin_cache
 from notice_ai.auth import install as install_auth
 from notice_ai.config import ConfigError
 from notice_ai.llm import LLMError
@@ -38,7 +40,21 @@ from notice_ai.search import SEARCH_MAX_WINDOW, SearchHit, search_page
 logger = logging.getLogger(__name__)
 _WEB = Path(__file__).resolve().parent / "web"
 
-app = FastAPI(title="notice-draft-ai API", version="0.1")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """서버가 사는 동안 빗썸 거래 대상 목록을 10분마다 받아 둔다(notice_ai.coins).
+
+    빗썸이 안 되더라도 서버는 그대로 뜬다 — 코인 이름 자동 채우기만 쉬고, 수기 입력은 계속 된다.
+    """
+    coin_cache.start()
+    try:
+        yield
+    finally:
+        await coin_cache.stop()
+
+
+app = FastAPI(title="notice-draft-ai API", version="0.1", lifespan=lifespan)
 
 # CORS(프론트가 다른 주소에서 부를 수 있게) + 공유 토큰 접근 통제.
 # 둘 다 환경변수로만 켜진다 — ALLOWED_ORIGINS 없으면 전부 허용, API_TOKEN 없으면 검사 없음(로컬 그대로).
@@ -330,6 +346,42 @@ def extract(req: ExtractRequest) -> ExtractResponse:
 
     return ExtractResponse(**extract_inputs(
         req.resolved_categories(), text=req.text, subtypes=req.subtypes).to_dict())
+
+
+class CoinOut(BaseModel):
+    ticker: str                  # 대문자. 예) ETH
+    name: str                    # 빗썸 한글명. 예) 이더리움
+    english: str
+    markets: list[str]           # 붙어 있는 마켓. 예) ["BTC", "KRW"]
+    warning: bool                # 빗썸 유의 표시
+
+
+class CoinsResponse(BaseModel):
+    count: int                   # 이번 응답 건수
+    total: int                   # 캐시가 갖고 있는 전체 건수
+    updated_at: str | None       # 마지막으로 빗썸에서 받은 시각(UTC). 한 번도 못 받았으면 null
+    stale: bool                  # 목록은 있으나 마지막 갱신이 실패함
+    coins: list[CoinOut]
+
+
+@app.get("/coins", response_model=CoinsResponse)
+def coin_list(
+    q: str = Query("", description="티커·한글명·영문명 일부. 비우면 전체"),
+    limit: int = Query(500, ge=1, le=2000, description="최대 건수"),
+    refresh: bool = Query(False, description="빗썸에서 지금 바로 다시 받기(신규 상장이 안 보일 때)"),
+) -> CoinsResponse:
+    """거래 대상 코인 목록 — 프론트의 코인 입력칸 자동완성용.
+
+    10분마다 백그라운드로 받아 둔 메모리 캐시에서 바로 답한다(빗썸을 매번 부르지 않는다).
+    캐시가 비어 있으면(방금 뜬 서버·첫 갱신 실패) 이번 요청에서 한 번 받아 채운다.
+    """
+    if refresh or not coin_cache.known():
+        coin_cache.refresh()        # 동기 함수 = FastAPI가 스레드풀에서 부르므로 이벤트 루프를 막지 않는다
+    s = coin_cache.status()
+    found = coin_cache.search(q, limit=limit)
+    return CoinsResponse(count=len(found), total=s["count"], updated_at=s["updated_at"],
+                         stale=bool(s.get("stale")),
+                         coins=[CoinOut(**c.as_dict()) for c in found])
 
 
 @app.post("/prepare", response_model=DraftResponse)

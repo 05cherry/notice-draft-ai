@@ -11,6 +11,8 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from notice_ai import coins
+
 _ALIAS_PATH = Path(__file__).resolve().parents[2] / "data" / "coin_aliases.json"
 _NAME_TICKER_RE = re.compile(r"([가-힣A-Za-z0-9 .]+?)\s*\(([A-Z0-9]{2,10})\)")
 
@@ -38,10 +40,18 @@ def extract_aliases_from_titles(titles: list[str]) -> dict[str, set[str]]:
 
 
 def expand(ticker: str | None, name: str | None = None) -> list[str]:
+    """검색어에 붙일 별칭들.
+
+    시드 JSON(data/coin_aliases.json)은 손으로 채운 것이라 신규 상장을 모른다. 그래서 빗썸
+    거래 대상 캐시에 있으면 거기 한글명·영문명도 같이 넣는다(coins 참고). 리콜만 늘리는 추가라
+    캐시가 비어 있어도 전과 똑같이 동작한다.
+    """
     terms: set[str] = set()
     if ticker:
         terms.add(ticker)
         terms.update(_seed().get(ticker.upper(), []))
     if name:
         terms.add(name)
+    if found := coins.get(ticker or name):
+        terms.update(t for t in (found.ticker, found.name, found.english) if t)
     return sorted(terms)

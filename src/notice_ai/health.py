@@ -2,7 +2,9 @@
 
 검색 서버(OpenSearch)·임베딩(Bedrock)·LLM을 본다. LLM은 초안을 생성해 보지는 않고(비용)
 모델 목록 조회로 키가 통하는지만 확인한다 — 토큰 비용이 없고, 키가 틀렸는지를 /draft 전에 알 수 있다.
-status: ok(전부 정상) / degraded(검색은 되지만 임베딩·LLM 쪽 문제 — 비슷한 공지·유형 추정·초안 생성이 제한됨)
+빗썸 코인 목록(coins)은 캐시만 들여다본다 — 여기서 빗썸을 부르지는 않는다.
+status: ok(전부 정상) / degraded(검색은 되지만 임베딩·LLM·코인 목록 쪽 문제 — 비슷한 공지·유형 추정·
+        초안 생성·코인 이름 자동 채우기가 제한됨)
         / down(검색 서버에 못 붙음 — 검색·참고 공지 선택이 안 됨).
 """
 
@@ -10,7 +12,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from notice_ai import config, llm
+from notice_ai import coins, config, llm
 
 
 def _err(e: Exception) -> str:
@@ -47,10 +49,15 @@ def check(*, embed: Callable | None = None, client=None) -> dict:
         if auth.get("error"):
             out["llm"]["error"] = auth["error"]
 
+    # 빗썸 코인 목록. 한 번도 못 받았으면(ok=False) 이름 자동 채우기가 쉬고 있다는 뜻이라 degraded로 본다.
+    # 방금 뜬 서버는 첫 갱신 전이라 ok=None이고, 이건 degraded로 치지 않는다.
+    out["coins"] = coins.status()
+
     llm_ok = out["llm"]["configured"] and out["llm"].get("key_ok") is not False
+    coins_ok = out["coins"]["ok"] is not False
     if not out["opensearch"]["ok"]:
         out["status"] = "down"
-    elif out["embedding"]["ok"] and llm_ok:
+    elif out["embedding"]["ok"] and llm_ok and coins_ok:
         out["status"] = "ok"
     else:
         out["status"] = "degraded"

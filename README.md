@@ -75,6 +75,7 @@ OPENAI_API_KEY=...
 LLM_PROVIDER=openai
 # 선택: NOTICE_INDEX(기본 notices_v3) · OPENAI_MODEL(gpt-4o-mini) · EVAL_MODEL(gpt-4o)
 #       API_TOKEN·ALLOWED_ORIGINS(공개 주소에 올릴 때만, 아래 '배포' 참고)
+#       EXTRACT_MODEL·DRAFT_MODEL·EVAL_MODEL(역할별 모델, 아래 'LLM 역할' 참고)
 #       LLM_TIMEOUT(90초) · LLM_MAX_RETRIES(1) · AWS_REGION(ap-northeast-2) · BEDROCK_EMBED_MODEL
 ```
 Bedrock 임베딩은 `~/.aws/credentials`(`aws configure`)의 자격증명을 씁니다. 없어도 검색·초안은 BM25만으로
@@ -96,6 +97,27 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 - http://localhost:8000/docs — API 문서(눌러 보며 호출)
 - http://localhost:8000/ui — 검색 화면
 - http://localhost:8000/health?deep=true — 검색 서버·임베딩·LLM 설정 점검
+
+## LLM 역할
+
+부르는 곳마다 하는 일이 달라서 역할별로 모델을 따로 고릅니다(`llm.for_role`).
+
+| 역할 | 하는 일 | 호출 | 기본 모델 |
+|---|---|---|---|
+| `extract` | 요청문에서 값 뽑기(`/extract`) | 1회 | `gpt-4o-mini` |
+| `draft` | 초안 생성·수정(`/draft`) | 1~2회 | `gpt-4o-mini` |
+| `evaluate` | 초안 평가(`/draft`, `evaluate=true`) | 1~2회 | `gpt-4o` |
+
+`/draft` 한 번에 **2~4회**입니다(생성 1~2 + 평가 1~2).
+
+모델은 `EXTRACT_MODEL`·`DRAFT_MODEL`·`EVAL_MODEL`, provider는 `EXTRACT_PROVIDER`·`DRAFT_PROVIDER`·
+`EVAL_PROVIDER`로 각각 정합니다. 없으면 `OPENAI_MODEL`(local·company는 각 `*_LLM_MODEL`)과
+`LLM_PROVIDER`를 물려받으므로 **쓰던 설정은 그대로 동작합니다.** 평가만 provider 모델을
+물려받지 않습니다 — 생성보다 똑똑한 모델을 쓰라고 일부러 따로 둔 자리입니다.
+
+`/health?deep=true`의 `llm.roles`에서 역할별로 무엇이 잡혔는지 확인할 수 있습니다.
+
+Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설정과 무관합니다.
 
 ## API
 

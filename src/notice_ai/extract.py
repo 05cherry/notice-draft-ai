@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from notice_ai.llm import LLM, get_llm
+from notice_ai.llm import LLM, for_role
 from notice_ai.notice_types import (
     FIELDS,
     Part,
@@ -194,7 +194,7 @@ def extract_inputs(
     lines, _ = _field_lines(res.parts)
     out.asked = [ln.split()[1] for ln in lines]
     system, user = build_prompt(res.parts, text, now or now_kst())
-    answer = (llm or get_llm()).generate(system, user, max_tokens=MAX_TOKENS)
+    answer = (llm or for_role("extract")).generate(system, user, max_tokens=MAX_TOKENS)
 
     raw = parse_json(answer)
     if raw is None:

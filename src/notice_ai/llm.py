@@ -1,6 +1,14 @@
 """LLM 인터페이스 — 갈아끼울 수 있는 부품.
 
 초안 생성 로직은 '어떤 LLM인지' 몰라도 되게, 공통 인터페이스(generate)만 쓴다.
+
+부르는 곳마다 하는 일이 달라서 역할(role)별로 모델을 따로 고른다 — for_role(역할).
+    extract    요청문에서 값 뽑기. 짧은 JSON 하나라 싼 모델로 충분
+    draft      초안 생성·수정. 품질이 곧 결과물
+    evaluate   초안 평가. 생성보다 똑똑한 모델을 쓰라고 원래부터 따로 뒀다
+역할별로 {EXTRACT,DRAFT,EVAL}_MODEL · {EXTRACT,DRAFT,EVAL}_PROVIDER 를 줄 수 있고,
+없으면 (구) OPENAI_MODEL 등과 LLM_PROVIDER 를 그대로 물려받는다(쓰던 설정이 안 깨진다).
+
 provider는 환경변수 LLM_PROVIDER로 고른다:
     openai   집 테스트 (OpenAI GPT)          — OPENAI_API_KEY 필요
     local    로컬 LLM (OpenAI 호환 서버, 예: Qwen/vLLM/Ollama) — LOCAL_LLM_BASE_URL
@@ -32,6 +40,19 @@ LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "1"))
 
 # provider별 키 환경변수 이름 — 안내 문구에서 "무엇을 고쳐야 하는지" 가리키는 데 쓴다.
 KEY_ENV = {"openai": "OPENAI_API_KEY", "local": "LOCAL_LLM_KEY", "company": "COMPANY_LLM_KEY"}
+
+ROLES = ("extract", "draft", "evaluate")
+
+# 역할 → 환경변수 이름. evaluate 는 EVALUATE_ 가 아니라 EVAL_ 이다(쓰던 이름 그대로).
+_ROLE_PROVIDER_ENV = {"extract": "EXTRACT_PROVIDER", "draft": "DRAFT_PROVIDER", "evaluate": "EVAL_PROVIDER"}
+_ROLE_MODEL_ENV = {"extract": "EXTRACT_MODEL", "draft": "DRAFT_MODEL", "evaluate": "EVAL_MODEL"}
+
+# (구) provider별 모델 환경변수. 역할별 값이 없을 때 물려받는다.
+_PROVIDER_MODEL_ENV = {"openai": "OPENAI_MODEL", "local": "LOCAL_LLM_MODEL", "company": "COMPANY_LLM_MODEL"}
+_PROVIDER_DEFAULT = {"openai": "gpt-4o-mini", "local": "qwen2.5", "company": "gpt-4o"}
+# 평가는 생성보다 똑똑한 모델을 쓰려고 일부러 따로 둔 자리라 provider 모델을 물려받지 않는다.
+# (local 만 예외 — 로컬 서버는 모델을 하나만 띄워 두는 경우가 많다.)
+_EVAL_DEFAULT = {"openai": "gpt-4o", "local": "qwen2.5", "company": "gpt-4o"}
 
 
 class LLM(Protocol):
@@ -131,26 +152,59 @@ def _brief(e: Exception) -> str:
     return " ".join(str(getattr(e, "message", "") or e).split())[:120]
 
 
-@lru_cache(maxsize=1)
-def get_llm() -> LLM:
-    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+def provider_for(role: str) -> str:
+    """역할이 쓸 provider. {역할}_PROVIDER → LLM_PROVIDER → openai."""
+    env = _ROLE_PROVIDER_ENV.get(role, "")
+    return (os.environ.get(env) or os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
 
-    if provider == "openai":
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-        return OpenAICompatLLM(api_key("openai"), None, model, key_env="OPENAI_API_KEY")
 
+def model_for(role: str, provider: str | None = None) -> str:
+    """역할이 쓸 모델. {역할}_MODEL → (구) provider별 모델 → 기본값.
+
+    평가만 provider 모델(OPENAI_MODEL 등)을 물려받지 않는다. 생성보다 똑똑한 모델을 쓰려고
+    일부러 따로 둔 자리이기 때문이고, 나누기 전에도 그렇게 동작했다.
+    """
+    provider = provider or provider_for(role)
+    if value := os.environ.get(_ROLE_MODEL_ENV.get(role, ""), "").strip():
+        return value
+    if role == "evaluate":
+        if provider == "local" and (value := os.environ.get("LOCAL_LLM_MODEL", "").strip()):
+            return value
+        return _EVAL_DEFAULT.get(provider, "gpt-4o")
+    if value := os.environ.get(_PROVIDER_MODEL_ENV.get(provider, ""), "").strip():
+        return value
+    return _PROVIDER_DEFAULT.get(provider, "gpt-4o-mini")
+
+
+def _base_url(provider: str) -> str | None:
     if provider == "local":
-        # 로컬 OpenAI 호환 서버(vLLM/Ollama 등). 키는 보통 아무 값.
-        base = os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:8001/v1")
-        model = os.environ.get("LOCAL_LLM_MODEL", "qwen2.5")
-        return OpenAICompatLLM(api_key("local", default="sk-local"), base, model, key_env="LOCAL_LLM_KEY")
-
+        return os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:8001/v1")
     if provider == "company":
-        base = os.environ.get("COMPANY_LLM_BASE_URL")  # 회사 엔드포인트
-        model = os.environ.get("COMPANY_LLM_MODEL", "gpt-4o")
-        return OpenAICompatLLM(api_key("company"), base, model, key_env="COMPANY_LLM_KEY")
+        return os.environ.get("COMPANY_LLM_BASE_URL")   # 회사 엔드포인트
+    return None
 
-    raise LLMError("config", f"알 수 없는 LLM_PROVIDER: {provider}")
+
+@lru_cache(maxsize=len(ROLES))
+def for_role(role: str) -> LLM:
+    """역할에 맞는 LLM. 역할마다 모델·provider를 따로 고를 수 있다.
+
+    부르는 곳마다 하는 일이 다르다 — 짧은 JSON 하나 뽑는 추출과 공지 한 편을 쓰는 초안 생성에
+    같은 모델을 매어 둘 이유가 없다. 바꾸는 값이 싸야 실제로 바꿔 본다.
+    """
+    if role not in ROLES:
+        raise LLMError("config", f"알 수 없는 역할: {role}. 가능: {', '.join(ROLES)}")
+    provider = provider_for(role)
+    if provider not in KEY_ENV:
+        env = _ROLE_PROVIDER_ENV[role] if os.environ.get(_ROLE_PROVIDER_ENV[role]) else "LLM_PROVIDER"
+        raise LLMError("config", f"알 수 없는 {env}: {provider}. 가능: {', '.join(KEY_ENV)}")
+    default_key = "sk-local" if provider == "local" else ""   # 로컬 서버는 키를 안 본다
+    return OpenAICompatLLM(api_key(provider, default=default_key), _base_url(provider),
+                           model_for(role, provider), key_env=KEY_ENV[provider])
+
+
+def get_llm() -> LLM:
+    """(구) 이름. 초안 생성용 LLM."""
+    return for_role("draft")
 
 
 def check_auth(llm: LLM | None = None) -> dict:
@@ -181,12 +235,17 @@ def check_auth(llm: LLM | None = None) -> dict:
 
 
 def settings() -> dict:
-    """/health?deep=true용 LLM 설정 요약. 초안 생성은 부르지 않는다(비용)."""
-    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+    """/health?deep=true용 LLM 설정 요약. 실제 호출은 하지 않는다(비용).
+
+    provider·model 은 초안 생성 기준이다(예전 응답과 같은 자리). 역할마다 다를 수 있으므로
+    roles 에 셋을 다 담는다 — 화면에서 '추출은 싼 모델, 평가는 큰 모델'을 눈으로 확인하려면
+    이게 있어야 한다.
+    """
+    roles = {r: {"provider": provider_for(r), "model": model_for(r)} for r in ROLES}
     try:
-        llm = get_llm()
+        llm = for_role("draft")
     except LLMError as e:
-        return {"provider": provider, "configured": False, "error": str(e)}
-    return {"provider": provider, "model": getattr(llm, "_model", ""), "configured": True,
-            "key": getattr(llm, "_key_shape", ""),
+        return {"provider": provider_for("draft"), "configured": False, "error": str(e), "roles": roles}
+    return {"provider": provider_for("draft"), "model": getattr(llm, "_model", ""), "configured": True,
+            "key": getattr(llm, "_key_shape", ""), "roles": roles,
             "timeout": LLM_TIMEOUT, "max_retries": LLM_MAX_RETRIES}

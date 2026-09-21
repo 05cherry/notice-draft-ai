@@ -23,7 +23,7 @@ from typing import Callable
 
 from notice_ai import config, factcheck
 from notice_ai.evaluator import Evaluation, evaluate
-from notice_ai.llm import LLM, get_llm
+from notice_ai.llm import LLM, for_role
 from notice_ai.notice_types import (
     FIELDS,
     Part,
@@ -680,7 +680,7 @@ def draft_notice(
                   if c is not selected and c.tier == selected.tier][:BOILERPLATE_REFS]
         ref_specific = factcheck.specific_lines(_original(selected)[1][:REF_CLIP], _doc_tickers(selected), others)
     check = lambda d: factcheck.check_draft(d, parts, reference_tickers=ref_tickers, reference_specific=ref_specific)
-    llm = llm or get_llm()
+    llm = llm or for_role("draft")
 
     draft = llm.generate(system, user, max_tokens=GEN_MAX_TOKENS)
     chk = check(draft)

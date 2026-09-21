@@ -249,6 +249,15 @@
   → `render.yaml`에 `value:`로 적은 값은 블루프린트가 계속 강제한다.
   → 환경마다 다른 값(계정·자격증명)은 `sync: false`로 두거나, 코드에 기본값이 있으면 아예 안 적는다.
 
+## LLM 설정
+- **평가 모델만 바꾸려는데 초안 생성까지 바뀜 / 추출이 초안과 같은 모델에 묶임**
+  → `OPENAI_MODEL` 하나를 여러 용도가 나눠 쓰고 있었다.
+  → 역할별로 고른다(`llm.for_role`): `EXTRACT_MODEL`·`DRAFT_MODEL`·`EVAL_MODEL`.
+  안 주면 예전 환경변수를 물려받으므로 쓰던 설정은 안 깨진다.
+- **provider 분기를 한쪽만 고쳐 평가와 생성이 어긋남**
+  → `llm.get_llm()`과 `evaluator._eval_llm()`에 같은 로직이 두 벌 있었다.
+  → `for_role` 한 곳으로 합쳤다. 새 provider나 역할은 여기만 고친다.
+
 ## LLM 추출(/extract)
 - **요청문에 없는 값을 채움 (`resume_at="미정"`, `law_clause="[조항 확인 필요]"`)**
   → 항목 설명(필드 질문)에 든 보기·안내 문구를 LLM이 지시로 읽는다.

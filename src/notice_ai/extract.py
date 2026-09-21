@@ -35,6 +35,9 @@ from notice_ai.notice_types import (
 
 _PROMPT = (Path(__file__).resolve().parent / "prompts" / "extract.txt").read_text(encoding="utf-8")
 
+# "[조항 확인 필요]" 처럼 대괄호 하나로만 이뤄진 값. 값이 아니라 '값 없음'의 표기다.
+_PLACEHOLDER_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
+
 MAX_TOKENS = 800           # 필드 10여 개짜리 JSON이면 충분하다
 MAX_TEXT = 2000            # 요청문이 이보다 길면 자른다(요청문은 보통 한두 줄)
 _WEEKDAYS = "월화수목금토일"
@@ -105,6 +108,30 @@ def parse_json(raw: str) -> dict | None:
     return out if isinstance(out, dict) else None
 
 
+def _drop_placeholders(raw: dict) -> dict:
+    """자리표시자만 든 값을 버린다.
+
+    항목 설명에 그런 문구가 들어 있으면(law_clause 질문의 "없으면 [조항 확인 필요]로 남깁니다")
+    LLM이 사람에게 묻는 말을 지시로 읽고 그대로 옮겨 적는다. 실제로 그랬다.
+
+    형식이 틀린 게 아니라 애초에 값이 아니므로 rejected 가 아니라 조용히 버린다.
+    사용자가 말한 적 없는 항목을 '형식이 안 맞았다'고 알리면 도움이 아니라 잡음이다.
+    빈 채로 두면 초안 단계에서 원래대로 [확인 필요]가 들어간다(drafting._MISSING_HINTS).
+    """
+    out: dict = {}
+    for k, v in raw.items():
+        if isinstance(v, str):
+            if not _PLACEHOLDER_RE.match(v):
+                out[k] = v
+        elif isinstance(v, (list, tuple)):
+            items = [i for i in v if not (isinstance(i, str) and _PLACEHOLDER_RE.match(i))]
+            if items:
+                out[k] = items
+        else:
+            out[k] = v
+    return out
+
+
 def _collect(parts: list[Part], raw: dict) -> tuple[dict, dict[str, list[str]]]:
     """LLM이 준 값 중 이 유형이 쓰는 항목만, 기존 정규화를 거쳐 모은다."""
     merged: dict = {}
@@ -151,7 +178,7 @@ def extract_inputs(
         out.warnings.append("추출 결과를 읽지 못했습니다(JSON이 아님). 입력칸을 직접 채워 주세요.")
         return out
 
-    merged, used = _collect(res.parts, raw)
+    merged, used = _collect(res.parts, _drop_placeholders(raw))
     for name, value in merged.items():
         problem = field_problem(name, value)
         label = FIELDS[name].label

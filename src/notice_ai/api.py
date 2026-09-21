@@ -150,6 +150,7 @@ def ui() -> str:
 # ---- 초안 생성 (기능 2) ----
 # 흐름(프론트가 매번 전체 값을 보내는 무상태 방식):
 #   GET /types → 카테고리(1~2개) 선택, subtype·질문 목록 확인
+#   POST /extract → 요청문에서 입력값 뽑아 칸 미리 채우기 (선택, LLM 1회). 제안일 뿐 초안에 바로 쓰이지 않는다
 #   POST /prepare → 유형 판별 + 누락 필드(질문) + 유사 공지 후보·자동 선택 (LLM 호출 없음)
 #   POST /draft → 초안 생성 + 검증 + 평가 + (필요 시 1회 수정) → 최종 초안
 class DraftRequest(BaseModel):
@@ -288,6 +289,42 @@ def types() -> list[dict]:
     from notice_ai.notice_types import catalog
 
     return catalog()
+
+
+class ExtractRequest(BaseModel):
+    categories: list[str] = Field(default_factory=list, description="카테고리 1~2개. 예) ['입출금']")
+    category: str | None = Field(None, description="(구) 단일 카테고리. categories가 없을 때만 사용")
+    subtypes: dict[str, str] = Field(default_factory=dict, description="카테고리별 subtype 직접 지정(선택)")
+    text: str = Field("", description="작성하려는 공지 요청문. 여기서 값을 뽑는다")
+
+    def resolved_categories(self) -> list[str]:
+        return self.categories or ([self.category] if self.category else [])
+
+
+class ExtractResponse(BaseModel):
+    status: str                  # error | ok
+    parts: list[dict]
+    fields: list[dict]           # 뽑은 값 {field, label, value, display, categories} — 화면 입력칸에 채운다
+    rejected: list[dict]         # 형식이 안 맞아 버린 값 {field, label, value, problem}
+    asked: list[str]             # 뽑아 보려 한 항목 이름(무엇을 못 찾았는지 알 수 있게)
+    errors: list[str]
+    warnings: list[str]
+
+
+@app.post("/extract", response_model=ExtractResponse)
+def extract(req: ExtractRequest) -> ExtractResponse:
+    """요청문 → 입력값 제안 (기능 2의 앞단). LLM 1회.
+
+    "헤데라(HBAR) 입출금 9/25 15시부터 중단, 네트워크 점검 때문" 같은 한 줄에서 coins·suspend_at·reason을
+    뽑아 돌려준다. 화면은 이 값으로 입력칸을 채우고 '확인하세요'로 표시한다.
+
+    뽑은 값은 **제안일 뿐이다.** /draft 는 사용자가 확인해 보낸 inputs 만 보므로, 여기서 틀려도
+    초안의 사실값은 오염되지 않는다. 형식 검사를 통과 못 한 값은 fields가 아니라 rejected로 간다.
+    """
+    from notice_ai.extract import extract_inputs
+
+    return ExtractResponse(**extract_inputs(
+        req.resolved_categories(), text=req.text, subtypes=req.subtypes).to_dict())
 
 
 @app.post("/prepare", response_model=DraftResponse)

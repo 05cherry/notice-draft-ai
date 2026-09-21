@@ -258,6 +258,12 @@ def start() -> None:
 
 
 async def stop() -> None:
+    """루프를 멈춘다.
+
+    취소는 다음 주기를 막을 뿐, 이미 스레드에서 돌고 있는 호출까지 끊지는 못한다
+    (asyncio.to_thread는 스레드를 취소할 수 없다). 그 한 건은 끝나고 캐시에 써도
+    서버가 내려가는 중이라 해가 없다.
+    """
     global _task
     task, _task = _task, None
     if not task or task.done():

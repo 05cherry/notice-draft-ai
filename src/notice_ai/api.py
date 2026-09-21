@@ -19,13 +19,15 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, Field
 
@@ -168,6 +170,7 @@ def ui() -> str:
 # ---- 초안 생성 (기능 2) ----
 # 흐름(프론트가 매번 전체 값을 보내는 무상태 방식):
 #   GET /types → 카테고리(1~2개) 선택, subtype·질문 목록 확인
+#   POST /extract → 요청문에서 입력값 뽑아 칸 미리 채우기 (선택, LLM 1회). 제안일 뿐 초안에 바로 쓰이지 않는다
 #   POST /prepare → 유형 판별 + 누락 필드(질문) + 유사 공지 후보·자동 선택 (LLM 호출 없음)
 #   POST /draft → 초안 생성 + 검증 + 평가 + (필요 시 1회 수정) → 최종 초안
 class DraftRequest(BaseModel):
@@ -223,13 +226,14 @@ class DraftResponse(BaseModel):
     referenced: list[str] = []
 
 
-def _run(req: DraftRequest, prepare_only: bool) -> DraftResponse:
+def _run(req: DraftRequest, prepare_only: bool, on_progress=None) -> DraftResponse:
     from notice_ai.drafting import draft_notice
 
     o = draft_notice(
         req.resolved_categories(), text=req.text, inputs=req.merged_inputs(),
         part_inputs=req.part_inputs, subtypes=req.subtypes, base_notice_url=req.base_notice_url,
         evaluate_draft=req.evaluate, prepare_only=prepare_only, hybrid=req.hybrid,
+        on_progress=on_progress,
     )
     d = o.to_dict()
     sel = o.selected_reference or {}
@@ -308,6 +312,42 @@ def types() -> list[dict]:
     return catalog()
 
 
+class ExtractRequest(BaseModel):
+    categories: list[str] = Field(default_factory=list, description="카테고리 1~2개. 예) ['입출금']")
+    category: str | None = Field(None, description="(구) 단일 카테고리. categories가 없을 때만 사용")
+    subtypes: dict[str, str] = Field(default_factory=dict, description="카테고리별 subtype 직접 지정(선택)")
+    text: str = Field("", description="작성하려는 공지 요청문. 여기서 값을 뽑는다")
+
+    def resolved_categories(self) -> list[str]:
+        return self.categories or ([self.category] if self.category else [])
+
+
+class ExtractResponse(BaseModel):
+    status: str                  # error | ok
+    parts: list[dict]
+    fields: list[dict]           # 뽑은 값 {field, label, value, display, categories} — 화면 입력칸에 채운다
+    rejected: list[dict]         # 형식이 안 맞아 버린 값 {field, label, value, problem}
+    asked: list[str]             # 뽑아 보려 한 항목 이름(무엇을 못 찾았는지 알 수 있게)
+    errors: list[str]
+    warnings: list[str]
+
+
+@app.post("/extract", response_model=ExtractResponse)
+def extract(req: ExtractRequest) -> ExtractResponse:
+    """요청문 → 입력값 제안 (기능 2의 앞단). LLM 1회.
+
+    "헤데라(HBAR) 입출금 9/25 15시부터 중단, 네트워크 점검 때문" 같은 한 줄에서 coins·suspend_at·reason을
+    뽑아 돌려준다. 화면은 이 값으로 입력칸을 채우고 '확인하세요'로 표시한다.
+
+    뽑은 값은 **제안일 뿐이다.** /draft 는 사용자가 확인해 보낸 inputs 만 보므로, 여기서 틀려도
+    초안의 사실값은 오염되지 않는다. 형식 검사를 통과 못 한 값은 fields가 아니라 rejected로 간다.
+    """
+    from notice_ai.extract import extract_inputs
+
+    return ExtractResponse(**extract_inputs(
+        req.resolved_categories(), text=req.text, subtypes=req.subtypes).to_dict())
+
+
 class CoinOut(BaseModel):
     ticker: str                  # 대문자. 예) ETH
     name: str                    # 빗썸 한글명. 예) 이더리움
@@ -353,6 +393,68 @@ def prepare(req: DraftRequest) -> DraftResponse:
     missing_fields가 비고 후보를 확인했으면 같은 값(+원하면 base_notice_url)으로 /draft 호출.
     """
     return _run(req, prepare_only=True)
+
+
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+
+@app.post("/draft/stream")
+async def draft_stream(req: DraftRequest) -> StreamingResponse:
+    """/draft 와 같은 일을 하되 단계가 바뀔 때마다 알려 준다(Server-Sent Events).
+
+    초안 만들기는 수십 초가 걸리는데 그동안 화면이 깜깜하다. 작업 ID를 주고 따로 조회하는
+    방식도 있지만, 무료 플랜은 인스턴스가 하나뿐이고 15분이면 잠들었다 재시작하므로 들고 있던
+    작업이 날아간다. 연결 하나로 밀면 저장할 상태가 없다.
+
+    보내는 것:
+        event: stage  {stage, label, slow, elapsed_ms, ...}   단계 시작
+        event: done   DraftResponse 와 같은 모양
+        event: error  {detail, kind}
+    결과 모양은 /draft 와 같다. 값을 만드는 코드는 한 벌이고 여기서는 알리기만 한다.
+
+    브라우저의 EventSource 는 헤더를 못 붙여 토큰을 낼 수 없다. 프론트는 fetch 로 읽는다.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_progress(stage: str, info: dict) -> None:
+        # drafting 은 다른 스레드에서 돈다. 큐에 넣는 일만 이벤트 루프에 맡긴다.
+        loop.call_soon_threadsafe(queue.put_nowait, ("stage", info))
+
+    async def run() -> None:
+        try:
+            out = await asyncio.to_thread(_run, req, False, on_progress)
+            await queue.put(("done", out.model_dump()))
+        except HTTPException as e:
+            await queue.put(("error", {"detail": e.detail, "kind": "error"}))
+        except LLMError as e:
+            await queue.put(("error", {"detail": f"초안 생성 AI 호출 실패 — {e}", "kind": e.kind}))
+        except OpenSearchException as e:
+            await queue.put(("error", {"detail": f"검색 서버(OpenSearch)에 연결하지 못했습니다({type(e).__name__}).",
+                                       "kind": "search_unavailable"}))
+        except ConfigError as e:
+            await queue.put(("error", {"detail": f"서버 설정이 빠졌습니다: {e}", "kind": "config"}))
+        except Exception as e:      # 예외 처리기가 못 잡는다(응답이 이미 흐르고 있다)
+            logger.exception("/draft/stream 실패")
+            await queue.put(("error", {"detail": f"서버 오류가 났습니다({type(e).__name__}).", "kind": "error"}))
+        finally:
+            await queue.put(None)
+
+    async def events():
+        task = asyncio.create_task(run())
+        try:
+            while (item := await queue.get()) is not None:
+                yield _sse(*item)
+        finally:
+            # 브라우저가 중간에 끊으면 여기로 온다. 이미 시작한 LLM 호출은 되돌릴 수 없지만
+            # 매달린 작업을 남기지는 않는다.
+            task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",      # 중간 프록시가 모아 두면 진행 표시가 한꺼번에 온다
+    })
 
 
 @app.post("/draft", response_model=DraftResponse)

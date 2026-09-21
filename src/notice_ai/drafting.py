@@ -14,16 +14,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter, OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter as _perf
 from typing import Callable
 
 from notice_ai import config, factcheck
 from notice_ai.evaluator import Evaluation, evaluate
-from notice_ai.llm import LLM, get_llm
+from notice_ai.llm import LLM, for_role
 from notice_ai.notice_types import (
     FIELDS,
     Part,
@@ -33,6 +35,7 @@ from notice_ai.notice_types import (
     field_label,
     get_type,
     is_empty,
+    now_kst,
     resolve,
     routing_text,
     title_hint,
@@ -40,8 +43,23 @@ from notice_ai.notice_types import (
 )
 from notice_ai.search import SearchHit, bm25_search
 
+logger = logging.getLogger(__name__)
+
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 _COMMON = (_PROMPT_DIR / "common.txt").read_text(encoding="utf-8")
+
+# 진행 상황으로 알릴 단계. 느린 것은 LLM을 부르는 셋(generate·evaluate·revise)뿐이고
+# 나머지는 순식간이지만, 어디까지 왔는지 보이려면 빠른 단계도 지나간 표시를 해야 한다.
+STAGES: tuple[tuple[str, str], ...] = (
+    ("resolve", "유형 판별"),
+    ("search", "비슷한 공지 찾기"),
+    ("select", "참고 공지 고르기"),
+    ("generate", "초안 쓰기"),
+    ("check", "사실 검증"),
+    ("evaluate", "평가"),
+    ("revise", "수정"),
+)
+SLOW_STAGES = frozenset({"generate", "evaluate", "revise"})   # LLM을 부르는 단계
 
 MAX_REVISIONS = 1          # 무한 재시도 금지. 기준 미달이어도 수정은 1번만.
 CANDIDATE_POOL = 50        # 동점이 많아 넉넉히 받고 코드로 재정렬
@@ -605,10 +623,30 @@ def draft_notice(
     top_k: int = 5,
     hybrid: bool = False,
     semantic: Callable | None = None,
+    on_progress: Callable[[str, dict], None] | None = None,
 ) -> DraftOutcome:
     """전체 흐름. prepare_only=True면 후보·선택까지만(LLM 호출 없음).
-    hybrid=True면 후보 검색·순위에 의미 검색(Bedrock 임베딩)을 섞는다. 실패하면 경고 후 BM25만."""
+
+    hybrid=True면 후보 검색·순위에 의미 검색(Bedrock 임베딩)을 섞는다. 실패하면 경고 후 BM25만.
+
+    on_progress(stage, info)를 주면 단계가 시작될 때마다 부른다(api.py의 SSE가 쓴다).
+    없으면 아무 일도 하지 않으므로 기존 호출은 그대로다. 결과에는 영향이 없고,
+    콜백이 실패해도 초안 만들기를 멈추지 않는다 — 진행 표시 때문에 본 일이 죽으면 안 된다.
+    """
     out = DraftOutcome()
+    started = _perf()
+
+    def step(stage: str, **info) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(stage, {"stage": stage, "label": dict(STAGES).get(stage, stage),
+                                "slow": stage in SLOW_STAGES,
+                                "elapsed_ms": int((_perf() - started) * 1000), **info})
+        except Exception:      # 진행 표시가 초안 만들기를 죽이면 안 된다
+            logger.warning("진행 상황 알림 실패(%s) — 초안은 계속 만든다", stage, exc_info=True)
+
+    step("resolve")
     res, out.estimated_subtypes = resolve_with_estimate(
         categories, text=text, inputs=inputs, part_inputs=part_inputs, subtypes=subtypes)
     out.parts = [p.to_dict() for p in res.parts]
@@ -619,9 +657,10 @@ def draft_notice(
         return out
     parts = res.parts
     out.title_hint = title_hint(parts)
-    now = now or datetime.now()
+    now = now or now_kst()      # 공지 시각은 KST. 서버가 UTC면 하루가 어긋난다
 
     # 후보는 필수값이 모자라도 보여준다(문답 중에 참고할 수 있게)
+    step("search")
     out.query = build_query(parts, text)
     knn = similarity = None
     if hybrid:
@@ -640,6 +679,7 @@ def draft_notice(
             sims = similarity([h.source_url for h in hits])
         except Exception as e:
             out.warnings.append(f"의미 유사도를 구하지 못해 BM25 점수만 사용했습니다: {str(e)[:120]}")
+    step("select", found=len(hits))
     ranked = rank_candidates(hits, parts, now=now, sims=sims)
     out.candidates = [c.brief(i + 1) for i, c in enumerate(ranked[:top_k])]
 
@@ -679,10 +719,14 @@ def draft_notice(
                   if c is not selected and c.tier == selected.tier][:BOILERPLATE_REFS]
         ref_specific = factcheck.specific_lines(_original(selected)[1][:REF_CLIP], _doc_tickers(selected), others)
     check = lambda d: factcheck.check_draft(d, parts, reference_tickers=ref_tickers, reference_specific=ref_specific)
-    llm = llm or get_llm()
+    llm = llm or for_role("draft")
 
+    step("generate")
     draft = llm.generate(system, user, max_tokens=GEN_MAX_TOKENS)
+    step("check")
     chk = check(draft)
+    if evaluate_draft:
+        step("evaluate")
     ev = _evaluate(parts, draft, chk, selected, eval_llm) if evaluate_draft else None
     out.first_draft, out.first_check = draft, chk.to_dict()
     out.first_evaluation = ev.to_dict() if ev else None
@@ -692,6 +736,7 @@ def draft_notice(
         # 사실 오류 + 평가 지적 + (수정하는 김에) 빠진 필수 항목 경고까지 넘긴다
         out.revision_reasons = ([i.message for i in chk.errors] + (ev.problems() if ev else [])
                                 + [i.message for i in chk.warnings if i.code == "section"])
+        step("revise", reasons=len(out.revision_reasons))
         try:
             draft2 = llm.generate(system, build_revision_prompt(user, draft, out.revision_reasons),
                                   max_tokens=GEN_MAX_TOKENS)
@@ -699,11 +744,14 @@ def draft_notice(
             draft2 = None
             out.warnings.append(f"수정 호출에 실패해 1차 초안을 최종본으로 유지했습니다: {str(e)[:120]}")
         if draft2 is not None:
+            step("check")
             chk2 = check(draft2)
             if len(chk2.errors) > len(chk.errors):
                 out.warnings.append("수정본의 사실 오류가 더 많아 1차 초안을 최종본으로 유지했습니다.")
             else:
                 draft, chk, out.revised = draft2, chk2, True
+                if evaluate_draft:
+                    step("evaluate", again=True)
                 ev = _evaluate(parts, draft, chk, selected, eval_llm) if evaluate_draft else None
 
     out.final_draft, out.final_check = draft, chk.to_dict()

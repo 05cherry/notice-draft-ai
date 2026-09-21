@@ -13,6 +13,7 @@
 | 공지 검색창 — BM25(Nori) + 1위 점수 50% 컷, 카테고리별 건수, 쪽 나눔, 비슷한 공지(의미 검색) | ✅ |
 | 초안 생성 — 입출금·공시·거래유의·안내, 카테고리 1~2개 | ✅ |
 | 유형 판별 — 요청문 규칙 + 규칙이 못 정하면 비슷한 공지로 추정(벡터) | ✅ |
+| 요청문에서 입력값 자동 추출 → 입력칸 미리 채우기 ([#7](https://github.com/05cherry/notice-draft-ai/issues/7)) | ✅ |
 | 사실 검증(코드) + GPT 평가 → 기준 미달이면 1회 수정 | ✅ |
 | 코인 목록 — 빗썸 거래 대상 API를 10분마다 받아 이름·티커 자동 채움(메모리 캐시) | ✅ |
 | 맞춤법 검사 | ⬜ [#5](https://github.com/05cherry/notice-draft-ai/issues/5) |
@@ -29,6 +30,7 @@
                                  (Nori BM25 + kNN)
                                         ▲
 FastAPI (api.py) ── /search · /ui ──────┤
+   ├─ /extract ─────────────────────▶ 요청문에서 입력값 뽑기(제안, 사용자 확인 후 inputs 로 들어옴)
    └─ /prepare · /draft · /check ──▶ drafting: 유형 판별 → 후보 검색·참고 공지 선택 → 프롬프트
                                         → LLM(openai / local / company) → factcheck(코드 검증) + evaluator(GPT 평가)
 
@@ -47,6 +49,7 @@ src/notice_ai/
   notice_types.py      유형 스펙(카테고리 > 유형·필드·섹션·규칙) + 라우팅 + 입력 정규화·검증
   factcheck.py         참고 공지 사실값 가리기 + 초안 사실 검증
   drafting.py          초안 파이프라인(유형 추정·후보·선택·프롬프트·생성·수정)
+  extract.py           요청문 → 입력값 뽑기(제안). /draft 는 이 값을 직접 쓰지 않는다
   evaluator.py         GPT 평가(5개 기준, 수정 여부 판정)
   llm.py               LLM 인터페이스(openai / local / company), 제한시간·오류 종류
   health.py            /health?deep=true 상태 점검
@@ -76,6 +79,7 @@ OPENAI_API_KEY=...
 LLM_PROVIDER=openai
 # 선택: NOTICE_INDEX(기본 notices_v3) · OPENAI_MODEL(gpt-4o-mini) · EVAL_MODEL(gpt-4o)
 #       API_TOKEN·ALLOWED_ORIGINS(공개 주소에 올릴 때만, 아래 '배포' 참고)
+#       EXTRACT_MODEL·DRAFT_MODEL·EVAL_MODEL(역할별 모델, 아래 'LLM 역할' 참고)
 #       LLM_TIMEOUT(90초) · LLM_MAX_RETRIES(1) · AWS_REGION(ap-northeast-2) · BEDROCK_EMBED_MODEL
 ```
 Bedrock 임베딩은 `~/.aws/credentials`(`aws configure`)의 자격증명을 씁니다. 없어도 검색·초안은 BM25만으로
@@ -98,6 +102,27 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 - http://localhost:8000/ui — 검색 화면
 - http://localhost:8000/health?deep=true — 검색 서버·임베딩·LLM 설정 점검
 
+## LLM 역할
+
+부르는 곳마다 하는 일이 달라서 역할별로 모델을 따로 고릅니다(`llm.for_role`).
+
+| 역할 | 하는 일 | 호출 | 기본 모델 |
+|---|---|---|---|
+| `extract` | 요청문에서 값 뽑기(`/extract`) | 1회 | `gpt-4o-mini` |
+| `draft` | 초안 생성·수정(`/draft`) | 1~2회 | `gpt-4o-mini` |
+| `evaluate` | 초안 평가(`/draft`, `evaluate=true`) | 1~2회 | `gpt-4o` |
+
+`/draft` 한 번에 **2~4회**입니다(생성 1~2 + 평가 1~2).
+
+모델은 `EXTRACT_MODEL`·`DRAFT_MODEL`·`EVAL_MODEL`, provider는 `EXTRACT_PROVIDER`·`DRAFT_PROVIDER`·
+`EVAL_PROVIDER`로 각각 정합니다. 없으면 `OPENAI_MODEL`(local·company는 각 `*_LLM_MODEL`)과
+`LLM_PROVIDER`를 물려받으므로 **쓰던 설정은 그대로 동작합니다.** 평가만 provider 모델을
+물려받지 않습니다 — 생성보다 똑똑한 모델을 쓰라고 일부러 따로 둔 자리입니다.
+
+`/health?deep=true`의 `llm.roles`에서 역할별로 무엇이 잡혔는지 확인할 수 있습니다.
+
+Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설정과 무관합니다.
+
 ## API
 
 | 엔드포인트 | 하는 일 | LLM |
@@ -105,15 +130,22 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 | `GET /search?q=&category=&page=&size=&sort=` | 공지 검색창. 1위 점수 50% 미만 제외, `total`·카테고리별 건수·`related`(비슷한 공지) | 없음 |
 | `GET /ui` | 간단한 검색 화면 | 없음 |
 | `GET /types` | 카테고리별 유형과 필수·선택 입력(질문 문구 포함) | 없음 |
+| `POST /extract` | 요청문에서 입력값을 뽑아 입력칸 채우기용 제안. 초안에 바로 쓰이지 않음 | 1회 |
 | `GET /coins?q=&limit=&refresh=` | 빗썸 거래 대상 목록(티커·한글명·영문명·마켓·유의 표시). 코인 입력칸 자동완성용 | 없음 |
 | `POST /prepare` | 유형 판별(추정 포함) + 빠진 입력 질문 + 참고 공지 후보 5건·자동 선택 이유 | 없음 |
 | `POST /draft` | 초안 생성 → 코드 검증 + GPT 평가 → 필요 시 1회 수정 → 최종 초안 | 2~4회 |
+| `POST /draft/stream` | `/draft`와 같은 일 + 단계가 바뀔 때마다 알림(SSE). 결과 모양 동일 | 2~4회 |
 | `POST /check` | 사용자가 고친 초안을 코드로만 다시 검사 | 없음 |
 | `GET /notice?url=` | 공지 1건(원문 + 초안이 참고하는 최초 버전 + 판별 유형) | 없음 |
 | `GET /health` | 생존 확인. `?deep=true`면 의존 서비스 상태 | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.
+- `/extract`는 **제안만** 돌려줍니다(`fields`). `/draft`는 사용자가 확인해 보낸 `inputs`만 보므로, 추출이
+  틀려도 초안의 사실값은 오염되지 않습니다. 형식 검사를 통과 못 한 값은 `rejected`로 내려가고 칸은 빈 채로 둡니다.
+- `/draft/stream`은 `event: stage`(단계 시작) → `event: done`(결과) 또는 `event: error`를 보냅니다.
+  `/draft`가 수십 초 걸리는 동안 화면이 깜깜하지 않게 하는 용도이고, 값을 만드는 코드는 한 벌입니다.
+  브라우저 `EventSource`는 헤더를 못 붙여 토큰을 낼 수 없으니 `fetch`로 읽습니다.
 - 외부 서비스가 실패하면 `{"detail": 안내 문구, "kind"}`로 답합니다(GPT 502/504, 검색 서버 503 등).
 
 단계별 규칙, 기준값, 유형 표, 참고 공지 선택, 검증 항목, 오류 응답, 검색창 규칙은

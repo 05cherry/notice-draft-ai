@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from notice_ai import coins
+
 MAX_CATEGORIES = 2
 TARGET_CATEGORIES = ("입출금", "공시", "거래유의", "안내")   # 이번 단계 구현 범위
 
@@ -385,11 +387,15 @@ def _coin(item) -> dict | None:
 
 
 def normalize_coins(value) -> list[dict]:
-    """list[dict] / list[str] / '메가이더(MEGA), 비너스(XVS)' → [{'name','ticker'}]."""
+    """list[dict] / list[str] / '메가이더(MEGA), 비너스(XVS)' → [{'name','ticker'}].
+
+    한쪽만 적혀 있으면(티커만·이름만) 빗썸 거래 대상 캐시로 나머지를 채운다. 'ETH'만 넣어도
+    제목이 '이더리움(ETH)'로 나온다. 캐시가 비었거나 모르는 코인이면 적은 그대로 둔다 — coins.fill 참고.
+    """
     if is_empty(value):
         return []
     items = value if isinstance(value, (list, tuple)) else re.split(r"\s*[,/]\s*", str(value))
-    return [c for c in (_coin(i) for i in items) if c]
+    return coins.fill([c for c in (_coin(i) for i in items) if c])
 
 
 def coin_label(coins: list[dict]) -> str:

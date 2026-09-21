@@ -51,8 +51,15 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
 
+      # --- 코인 목록(빗썸 공개 API) ---
+      # 키가 필요 없는 공개 API라 적을 환경변수가 없다. 서버가 뜨면 10분마다 알아서 받아
+      # 메모리에 캐시한다(notice_ai/coins.py). 빗썸이 막히면 초안 생성은 그대로 되고
+      # 코인 이름 자동 채우기만 쉰다 — /health?deep=true 의 coins 항목으로 확인한다.
+
       # 아래는 코드에 기본값이 있어 적지 않는다. 바꿔야 하면 대시보드에서 직접 더한다
       # (블루프린트가 모르는 값이므로 되돌려 놓지 않는다).
       #   LLM_PROVIDER    기본 openai   · OPENAI_MODEL  기본 gpt-4o-mini
       #   AWS_REGION      기본 ap-northeast-2
       #   NOTICE_INDEX    기본 notices_v3
+      #   COINS_REFRESH_SEC  기본 600(10분, 0이면 끔) · COINS_TIMEOUT_SEC 기본 10
+      #   BITHUMB_MARKET_URL 기본 https://api.bithumb.com/v1/market/all

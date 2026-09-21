@@ -14,6 +14,7 @@
 | 초안 생성 — 입출금·공시·거래유의·안내, 카테고리 1~2개 | ✅ |
 | 유형 판별 — 요청문 규칙 + 규칙이 못 정하면 비슷한 공지로 추정(벡터) | ✅ |
 | 사실 검증(코드) + GPT 평가 → 기준 미달이면 1회 수정 | ✅ |
+| 코인 목록 — 빗썸 거래 대상 API를 10분마다 받아 이름·티커 자동 채움(메모리 캐시) | ✅ |
 | 맞춤법 검사 | ⬜ [#5](https://github.com/05cherry/notice-draft-ai/issues/5) |
 | 프론트 | 🔶 별도 폴더 `notice-draft-front`의 React 프로토타입 ([#3](https://github.com/05cherry/notice-draft-ai/issues/3)) |
 | 접근 통제(인증·호출 제한) | ⬜ [#6](https://github.com/05cherry/notice-draft-ai/issues/6) |
@@ -30,6 +31,8 @@
 FastAPI (api.py) ── /search · /ui ──────┤
    └─ /prepare · /draft · /check ──▶ drafting: 유형 판별 → 후보 검색·참고 공지 선택 → 프롬프트
                                         → LLM(openai / local / company) → factcheck(코드 검증) + evaluator(GPT 평가)
+
+빗썸 거래 대상 API ──(10분마다)──▶ coins.py 메모리 캐시 ──▶ /coins(자동완성) · 코인 이름·티커 자동 채움
 ```
 
 ```
@@ -48,6 +51,7 @@ src/notice_ai/
   llm.py               LLM 인터페이스(openai / local / company), 제한시간·오류 종류
   health.py            /health?deep=true 상태 점검
   aliases.py           코인 별칭·티커 추출(수집·CSV 색인 때)
+  coins.py             빗썸 거래 대상 목록 — 10분마다 갱신하는 메모리 캐시(이름·티커 자동 채움)
   fusion.py hyde.py rerank.py   RRF 융합·가상 공지·리랭커 — CLI `search --hybrid`에서만 씀
   assembly.py          옛 문답 → 검색어 조립. 지금 흐름에서는 쓰지 않음(#12)
   prompts/             common.txt + category/<카테고리>.txt + subtype/<카테고리>/<유형>.txt
@@ -101,6 +105,7 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 | `GET /search?q=&category=&page=&size=&sort=` | 공지 검색창. 1위 점수 50% 미만 제외, `total`·카테고리별 건수·`related`(비슷한 공지) | 없음 |
 | `GET /ui` | 간단한 검색 화면 | 없음 |
 | `GET /types` | 카테고리별 유형과 필수·선택 입력(질문 문구 포함) | 없음 |
+| `GET /coins?q=&limit=&refresh=` | 빗썸 거래 대상 목록(티커·한글명·영문명·마켓·유의 표시). 코인 입력칸 자동완성용 | 없음 |
 | `POST /prepare` | 유형 판별(추정 포함) + 빠진 입력 질문 + 참고 공지 후보 5건·자동 선택 이유 | 없음 |
 | `POST /draft` | 초안 생성 → 코드 검증 + GPT 평가 → 필요 시 1회 수정 → 최종 초안 | 2~4회 |
 | `POST /check` | 사용자가 고친 초안을 코드로만 다시 검사 | 없음 |
@@ -113,6 +118,37 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 
 단계별 규칙, 기준값, 유형 표, 참고 공지 선택, 검증 항목, 오류 응답, 검색창 규칙은
 **[docs/PIPELINE.md](docs/PIPELINE.md)** 에 있습니다.
+
+## 코인 목록 (빗썸 거래 대상 API)
+
+코인 한글명·티커를 손으로 적지 않아도 되게, 빗썸 공개 API(`/v1/market/all`)에서 거래 대상 목록을
+**10분마다** 받아 둡니다. 저장은 **프로세스 메모리 한 벌**이고 DB를 쓰지 않습니다.
+
+- 티커만 넣으면 한글명을, 한글명만 넣으면 티커를 채웁니다 — `inputs.coins: ["ETH"]` → `이더리움(ETH)`.
+- **사람이 적은 값은 덮어쓰지 않습니다.** 비어 있는 쪽만 채웁니다.
+- 프론트 자동완성은 `GET /coins?q=이더`로 받습니다(캐시에서 바로 답하므로 빗썸을 매번 부르지 않습니다).
+- 빗썸이 죽어 있으면 **갖고 있던 목록을 그대로 씁니다.** 목록을 비우지 않습니다.
+- 검색어 별칭(`aliases.expand`)에도 이 이름들이 붙어, 손으로 채운 `data/coin_aliases.json`이
+  신규 상장을 몰라도 검색이 걸립니다.
+
+```bash
+py -m notice_ai.cli coins            # 전체 목록(캐시가 비면 한 번 받아 온다)
+py -m notice_ai.cli coins 이더        # 검색
+curl -H "X-API-Token: <토큰>" "https://<백엔드>.onrender.com/coins?q=이더"
+```
+
+환경변수(전부 선택, 기본값으로 동작):
+
+| 이름 | 기본값 | 설명 |
+|---|---|---|
+| `COINS_REFRESH_SEC` | `600` | 갱신 주기(초). `0`이면 자동 갱신을 끕니다 |
+| `COINS_TIMEOUT_SEC` | `10` | 빗썸 호출 제한시간(초) |
+| `BITHUMB_MARKET_URL` | `https://api.bithumb.com/v1/market/all` | 거래 대상 목록 주소 |
+
+> 메모리 캐시라서 서버가 재시작하면 목록도 사라지고(뜨자마자 다시 받습니다), 인스턴스가
+> 여러 개면 각자 갖습니다. 목록이 자주 바뀌지 않아 지금은 이걸로 충분합니다.
+> 차후 OpenSearch를 도커로 내리면서 PostgreSQL을 붙일 때 `coins.MemoryCoinStore`만
+> 같은 모양의 DB 구현으로 갈아 끼우면 됩니다(조회는 전부 store를 거치게 해 두었습니다).
 
 ## 문서
 - [docs/PIPELINE.md](docs/PIPELINE.md) — 규칙집. 코드의 기준값을 바꾸면 함께 고칩니다.

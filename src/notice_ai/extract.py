@@ -29,6 +29,7 @@ from notice_ai.notice_types import (
     field_label,
     field_problem,
     is_temporal,
+    is_unknown,
     normalize_inputs,
     resolve,
 )
@@ -37,6 +38,9 @@ _PROMPT = (Path(__file__).resolve().parent / "prompts" / "extract.txt").read_tex
 
 # "[조항 확인 필요]" 처럼 대괄호 하나로만 이뤄진 값. 값이 아니라 '값 없음'의 표기다.
 _PLACEHOLDER_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
+
+# 요청문에 '아직 안 정해졌다'는 뜻이 적혀 있는지. 없는데 '미정'을 뽑았다면 지어낸 것이다.
+_UNKNOWN_MARK = re.compile(r"미정|미확정|추후|아직|정해지지|안\s*정해|확정되지|모름|미상|TBD", re.I)
 
 MAX_TOKENS = 800           # 필드 10여 개짜리 JSON이면 충분하다
 MAX_TEXT = 2000            # 요청문이 이보다 길면 자른다(요청문은 보통 한두 줄)
@@ -132,6 +136,20 @@ def _drop_placeholders(raw: dict) -> dict:
     return out
 
 
+def _invented_unknown(value, text: str) -> bool:
+    """'미정'류 값인데 요청문에 그런 말이 없으면 지어낸 것이다.
+
+    프롬프트로 두 번 못박았는데도 실제 GPT가 재개 시점이 없는 요청문에 resume_at="미정"을
+    채우는 일이 되풀이됐다. 한 요청문에선 안 그러고 다른 요청문에선 그랬다 — 지시 준수는
+    확률적이라, 세 번째로 프롬프트를 고치는 것은 같은 실수다. '미정'인지 아닌지는 코드로
+    가릴 수 있으므로 코드로 막는다.
+
+    빈 항목과 '미정'은 뜻이 다르다. '미정'은 초안에 '추후 안내'로 못박혀 나가고, 빈 항목은
+    사람에게 되물을 여지를 남긴다. 사용자가 말한 적 없는 것을 못박으면 안 된다.
+    """
+    return is_unknown(value) and not _UNKNOWN_MARK.search(text)
+
+
 def _collect(parts: list[Part], raw: dict) -> tuple[dict, dict[str, list[str]]]:
     """LLM이 준 값 중 이 유형이 쓰는 항목만, 기존 정규화를 거쳐 모은다."""
     merged: dict = {}
@@ -180,6 +198,8 @@ def extract_inputs(
 
     merged, used = _collect(res.parts, _drop_placeholders(raw))
     for name, value in merged.items():
+        if _invented_unknown(value, text):
+            continue        # 자리표시자와 같은 이유로 조용히 버린다(사용자가 말한 적 없는 항목)
         problem = field_problem(name, value)
         label = FIELDS[name].label
         if problem:

@@ -173,6 +173,7 @@ def ui() -> str:
 #   GET /types → 카테고리(1~2개) 선택, subtype·질문 목록 확인
 #   POST /extract → 요청문에서 입력값 뽑아 칸 미리 채우기 (선택, LLM 1회). 제안일 뿐 초안에 바로 쓰이지 않는다
 #   POST /prepare → 유형 판별 + 누락 필드(질문) + 유사 공지 후보·자동 선택 (LLM 호출 없음)
+#   POST /spellcheck → 초안의 맞춤법·띄어쓰기 제안 (LLM 1회). 본문을 고쳐 주지는 않는다
 #   POST /draft → 초안 생성 + 검증 + 평가 + (필요 시 1회 수정) → 최종 초안
 class DraftRequest(BaseModel):
     categories: list[str] = Field(default_factory=list, description="카테고리 1~2개. 예) ['안내','입출금']")
@@ -303,6 +304,42 @@ def check(req: CheckRequest) -> CheckResponse:
         req.resolved_categories(), draft=req.draft_text(), text=req.text, inputs=req.merged_inputs(),
         part_inputs=req.part_inputs, subtypes=req.subtypes, base_notice_url=req.base_notice_url,
     ))
+
+
+class SpellRequest(CheckRequest):
+    """/check 와 같은 몸통을 받는다. categories·inputs 가 있으면 그 사실값까지 지킨다."""
+
+
+class SpellResponse(BaseModel):
+    status: str                  # error | ok
+    suggestions: list[dict]      # {before, after, reason, kind, positions} — 화면이 하나씩 적용
+    protected: list[dict]        # 사실값을 건드리려다 막힌 제안 {before, after, reason, kind, guarded}
+    dropped: int                 # 본문에 없는 곳을 고치라던 제안 수(지어낸 것)
+    errors: list[str]
+    warnings: list[str]
+
+
+@app.post("/spellcheck", response_model=SpellResponse)
+def spellcheck(req: SpellRequest) -> SpellResponse:
+    """초안의 맞춤법·띄어쓰기·어색한 표현을 짚는다 (기능 3). LLM 1회.
+
+    **고쳐진 본문을 돌려주지 않는다.** 위치가 딸린 제안만 준다. 맞춤법 검사가 본문을 고치면
+    가상자산 이름·날짜·링크 같은 사실값이 조용히 바뀌고, factcheck 는 교정 뒤를 다시 보지
+    않으므로 그대로 새어 나간다. 사실값과 겹치는 제안은 protected 로 내려보내 무엇을 막았는지
+    알려 준다. 본문에 없는 곳을 고치라는(지어낸) 제안은 dropped 로 센다.
+
+    적용 여부는 사람이 정하고, 고친 뒤에는 /check 로 다시 검사하면 된다.
+    """
+    from notice_ai.notice_types import resolve
+    from notice_ai.spellcheck import check_spelling
+
+    parts = None
+    if req.resolved_categories():
+        res = resolve(req.resolved_categories(), text=req.text, inputs=req.merged_inputs(),
+                      part_inputs=req.part_inputs, subtypes=req.subtypes)
+        parts = res.parts or None
+    return SpellResponse(**check_spelling(
+        req.draft_text(), title=req.title, body=req.body, parts=parts).to_dict())
 
 
 @app.get("/types")

@@ -16,7 +16,7 @@
 | 요청문에서 입력값 자동 추출 → 입력칸 미리 채우기 ([#7](https://github.com/05cherry/notice-draft-ai/issues/7)) | ✅ |
 | 사실 검증(코드) + GPT 평가 → 기준 미달이면 1회 수정 | ✅ |
 | 코인 목록 — 빗썸 거래 대상 API를 10분마다 받아 이름·티커 자동 채움(메모리 캐시) | ✅ |
-| 맞춤법 검사 | ⬜ [#5](https://github.com/05cherry/notice-draft-ai/issues/5) |
+| 맞춤법 검사 — 제안만 주고 사실값은 코드가 지킴 ([#5](https://github.com/05cherry/notice-draft-ai/issues/5)) | ✅ |
 | 프론트 | 🔶 별도 폴더 `notice-draft-front`의 React 프로토타입 ([#3](https://github.com/05cherry/notice-draft-ai/issues/3)) |
 | 접근 통제(인증·호출 제한) | ⬜ [#6](https://github.com/05cherry/notice-draft-ai/issues/6) |
 
@@ -50,6 +50,7 @@ src/notice_ai/
   factcheck.py         참고 공지 사실값 가리기 + 초안 사실 검증
   drafting.py          초안 파이프라인(유형 추정·후보·선택·프롬프트·생성·수정)
   extract.py           요청문 → 입력값 뽑기(제안). /draft 는 이 값을 직접 쓰지 않는다
+  spellcheck.py        맞춤법 제안 + 사실값 보호(고쳐진 본문을 만들지 않는다)
   evaluator.py         GPT 평가(5개 기준, 수정 여부 판정)
   llm.py               LLM 인터페이스(openai / local / company), 제한시간·오류 종류
   health.py            /health?deep=true 상태 점검
@@ -111,11 +112,12 @@ py -m uvicorn notice_ai.api:app --app-dir src --env-file .env --reload --port 80
 | `extract` | 요청문에서 값 뽑기(`/extract`) | 1회 | `gpt-4o-mini` |
 | `draft` | 초안 생성·수정(`/draft`) | 1~2회 | `gpt-4o-mini` |
 | `evaluate` | 초안 평가(`/draft`, `evaluate=true`) | 1~2회 | `gpt-4o` |
+| `spell` | 맞춤법 검사(`/spellcheck`) | 1회 | `gpt-4o-mini` |
 
 `/draft` 한 번에 **2~4회**입니다(생성 1~2 + 평가 1~2).
 
-모델은 `EXTRACT_MODEL`·`DRAFT_MODEL`·`EVAL_MODEL`, provider는 `EXTRACT_PROVIDER`·`DRAFT_PROVIDER`·
-`EVAL_PROVIDER`로 각각 정합니다. 없으면 `OPENAI_MODEL`(local·company는 각 `*_LLM_MODEL`)과
+모델은 `EXTRACT_MODEL`·`DRAFT_MODEL`·`EVAL_MODEL`·`SPELL_MODEL`, provider는 `EXTRACT_PROVIDER`·
+`DRAFT_PROVIDER`·`EVAL_PROVIDER`·`SPELL_PROVIDER`로 각각 정합니다. 없으면 `OPENAI_MODEL`(local·company는 각 `*_LLM_MODEL`)과
 `LLM_PROVIDER`를 물려받으므로 **쓰던 설정은 그대로 동작합니다.** 평가만 provider 모델을
 물려받지 않습니다 — 생성보다 똑똑한 모델을 쓰라고 일부러 따로 둔 자리입니다.
 
@@ -136,11 +138,16 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `POST /draft` | 초안 생성 → 코드 검증 + GPT 평가 → 필요 시 1회 수정 → 최종 초안 | 2~4회 |
 | `POST /draft/stream` | `/draft`와 같은 일 + 단계가 바뀔 때마다 알림(SSE). 결과 모양 동일 | 2~4회 |
 | `POST /check` | 사용자가 고친 초안을 코드로만 다시 검사 | 없음 |
+| `POST /spellcheck` | 맞춤법·띄어쓰기·어색한 표현 제안. **본문을 고쳐 주지 않음** | 1회 |
 | `GET /notice?url=` | 공지 1건(원문 + 초안이 참고하는 최초 버전 + 판별 유형) | 없음 |
 | `GET /health` | 생존 확인. `?deep=true`면 의존 서비스 상태 | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.
+- `/spellcheck`도 **제안만** 돌려줍니다. 고쳐진 본문을 주지 않습니다 — 맞춤법 검사가 본문을 고치면
+  가상자산 이름·날짜·링크가 조용히 바뀌고, `factcheck`는 교정 뒤를 다시 보지 않아 그대로 새어 나갑니다.
+  사실값과 겹치는 제안은 `protected`로 내려가고(무엇을 막았는지 함께), 본문에 없는 곳을 고치라는
+  제안은 `dropped`로 셉니다. 코인 이름은 입력값이 없어도 `이름(티커)` 꼴과 별칭 사전으로 지킵니다.
 - `/extract`는 **제안만** 돌려줍니다(`fields`). `/draft`는 사용자가 확인해 보낸 `inputs`만 보므로, 추출이
   틀려도 초안의 사실값은 오염되지 않습니다. 형식 검사를 통과 못 한 값은 `rejected`로 내려가고 칸은 빈 채로 둡니다.
 - `/draft/stream`은 `event: stage`(단계 시작) → `event: done`(결과) 또는 `event: error`를 보냅니다.

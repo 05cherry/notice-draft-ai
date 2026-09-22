@@ -349,11 +349,13 @@ class DictCheckResponse(BaseModel):
     index: str                   # 지금 분석기를 가져온 인덱스
     rules: int                   # 만들어진 사용자 사전 규칙 수
     checked: int                 # 검사한 코인 한글명 수
-    split: int                   # 지금 토큰 하나로 안 남는 이름 수(= 그 이름으로 검색이 안 됨)
-    fixed: int                   # 사전을 넣으면 하나로 붙는 이름 수
-    still: int                   # 사전을 넣어도 쪼개지는 이름 수
-    fixed_examples: list[dict]   # {name, now}
-    still_examples: list[dict]   # {name, now, after}
+    missing: int                 # 이름이 토큰에 아예 없는 수(= 그 이름으로 검색이 안 됨). 이게 진짜 고장
+    fixed: int                   # 사전을 넣으면 이름이 남는 수
+    still: int                   # 사전을 넣어도 없는 수
+    narrowed: int                # 이름은 찾히지만 사전 때문에 조각 검색이 막히는 수(득실 판단용)
+    fixed_examples: list[dict]   # {name, now, after}
+    still_examples: list[dict]
+    narrowed_examples: list[dict]
 
 
 @app.get("/admin/user-dictionary", response_model=DictCheckResponse)

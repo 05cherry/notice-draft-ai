@@ -86,14 +86,20 @@ def main() -> None:
             print(r["error"])
         else:
             print(f"사전 규칙 {r['rules']}개 · 코인 {r['checked']}개 검사")
-            print(f"  지금 쪼개짐 {r['split']}개 → 사전으로 고쳐짐 {r['fixed']}개 / 그대로 {r['still']}개")
+            print(f"  이름이 아예 안 남는 것 {r['missing']}개"
+                  f" → 사전으로 고쳐짐 {r['fixed']}개 / 그대로 {r['still']}개")
+            print(f"  (참고) 사전 때문에 조각 검색이 막히는 이름 {r['narrowed']}개")
             if r["fixed_examples"]:
                 print("\n  고쳐지는 것:")
                 for e in r["fixed_examples"]:
-                    print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {e['name']}")
+                    print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
             if r["still_examples"]:
                 print("\n  사전을 넣어도 그대로:")
                 for e in r["still_examples"]:
+                    print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
+            if r["narrowed_examples"]:
+                print("\n  조각 검색이 막히는 것(득실 판단 필요):")
+                for e in r["narrowed_examples"]:
                     print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
 
     elif a.command == "collect":

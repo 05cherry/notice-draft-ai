@@ -177,9 +177,17 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
     """사용자 사전이 실제로 필요한지, 넣으면 나아지는지 센다 (#34).
 
     코인 한글명 하나하나를 지금 인덱스의 분석기와 사전을 넣은 분석기로 각각 쪼개 보고 견준다.
-      쪼개짐  이름이 토큰 하나로 안 남는다 = 그 이름으로 검색하면 안 걸린다
-      고쳐짐  사전을 넣으니 토큰 하나가 됐다
-      남음    사전을 넣어도 여전히 쪼개진다(이름에 공백이 있거나 다른 이유)
+      못 찾음  이름이 토큰 목록에 아예 없다 = 그 이름으로 검색해도 안 걸린다 ← 진짜 고장
+      고쳐짐  사전을 넣으니 이름이 토큰으로 남는다
+      남음    사전을 넣어도 여전히 없다
+
+    '토큰이 하나인가'로 보면 안 된다. decompound_mode="mixed" 라서 복합명사는 원형과 조각을
+    둘 다 색인한다('비트코인' → 비트코인·비트·코인). 조각이 더 있어도 원형이 있으면 검색된다.
+    그걸 고장으로 세면 멀쩡한 이름까지 전부 고장으로 잡혀(실측 100개 중 72개) 재색인할 이유가
+    없는데도 있는 것처럼 보인다.
+
+    사전을 넣으면 조각이 사라지는 이름은 narrowed 로 따로 센다. 이름은 계속 찾히지만
+    조각으로 찾던 길이 막히므로('비트'로 비트코인 공지를 찾던 것) 득실이 있다.
 
     인덱스를 만들지 않고 _analyze 로만 보므로 지금 색인에는 아무 영향이 없다.
 
@@ -191,7 +199,8 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
         coins.refresh()
     rules = user_dictionary_rules()
     out = {"error": "", "index": config.INDEX_NAME, "rules": len(rules), "checked": 0,
-           "split": 0, "fixed": 0, "still": 0, "fixed_examples": [], "still_examples": []}
+           "missing": 0, "fixed": 0, "still": 0, "narrowed": 0,
+           "fixed_examples": [], "still_examples": [], "narrowed_examples": []}
     names = sorted({c.name for c in coins.known().values() if c.name and _HANGUL_RE.search(c.name)})
     if not names:
         out["error"] = "코인 목록이 비어 있습니다. 빗썸 호출이 됐는지 확인하세요."
@@ -199,17 +208,22 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
     if limit:
         names = names[:limit]
 
-    split, fixed, still = [], [], []
+    fixed, still, narrowed = [], [], []
+    missing = 0
     for name in names:
+        low = name.lower()
         now = _tokens(client, text=name, index=config.INDEX_NAME)
-        if now == [name.lower()]:
-            continue                      # 지금도 멀쩡하다
-        split.append(name)
         after = _tokens(client, text=name, rules=rules)
-        (fixed if after == [name.lower()] else still).append((name, now, after))
-    out.update(checked=len(names), split=len(split), fixed=len(fixed), still=len(still),
-               fixed_examples=[{"name": n, "now": now} for n, now, _ in fixed[:20]],
-               still_examples=[{"name": n, "now": now, "after": a} for n, now, a in still[:20]])
+        if low not in now:                       # 이름이 통째로 사라졌다 = 검색 불가
+            missing += 1
+            (fixed if low in after else still).append((name, now, after))
+        elif len(now) > 1 and len(after) == 1:   # 찾히긴 하는데 조각으로 찾던 길이 막힌다
+            narrowed.append((name, now, after))
+    out.update(checked=len(names), missing=missing, fixed=len(fixed), still=len(still),
+               narrowed=len(narrowed),
+               fixed_examples=[{"name": n, "now": now, "after": a} for n, now, a in fixed[:20]],
+               still_examples=[{"name": n, "now": now, "after": a} for n, now, a in still[:20]],
+               narrowed_examples=[{"name": n, "now": now, "after": a} for n, now, a in narrowed[:20]])
     return out
 
 

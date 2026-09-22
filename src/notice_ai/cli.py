@@ -43,6 +43,7 @@ def main() -> None:
 
     pd = sub.add_parser("check-dict", help="사용자 사전 효과 확인(#34). 색인을 건드리지 않는다")
     pd.add_argument("--limit", type=int, default=0, help="검사할 코인 수(0=전체)")
+    pd.add_argument("--offset", type=int, default=0, help="앞에서부터 건너뛸 수")
 
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
@@ -81,11 +82,11 @@ def main() -> None:
     elif a.command == "check-dict":
         from notice_ai.index_setup import diagnose_dictionary
 
-        r = diagnose_dictionary(a.limit)
+        r = diagnose_dictionary(a.limit, offset=a.offset)
         if r["error"]:
             print(r["error"])
         else:
-            print(f"사전 규칙 {r['rules']}개 · 코인 {r['checked']}개 검사")
+            print(f"사전 규칙 {r['rules']}개 · 코인 {r['checked']}/{r['total']}개 검사")
             print(f"  이름이 아예 안 남는 것 {r['missing']}개"
                   f" → 사전으로 고쳐짐 {r['fixed']}개 / 그대로 {r['still']}개")
             print(f"  (참고) 사전 때문에 조각 검색이 막히는 이름 {r['narrowed']}개")

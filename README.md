@@ -88,7 +88,8 @@ Bedrock 임베딩은 `~/.aws/credentials`(`aws configure`)의 자격증명을 �
 
 **3. 인덱스와 데이터** (CLI는 `PYTHONPATH=src`가 필요합니다)
 ```bash
-py -m notice_ai.cli setup-index                    # Nori + kNN 인덱스 생성
+py -m notice_ai.cli check-dict                     # 코인명이 조각나는지·사용자 사전이 고치는지 확인(색인 안 건드림)
+py -m notice_ai.cli setup-index                    # Nori + kNN 인덱스 생성(코인명 사용자 사전 포함)
 py -m notice_ai.cli collect                        # 공지 수집·색인 → 새 공지 임베딩까지 (--no-embed로 생략)
 py -m notice_ai.cli ingest-csv 공지데이터.csv       # 사내 CSV 색인(전체 이력·본문) → 새 공지 임베딩까지
 py -m notice_ai.cli embed                          # 임베딩 없는 공지만 채우기(재실행 안전)

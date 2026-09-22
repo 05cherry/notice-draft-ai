@@ -10,6 +10,8 @@ HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재�
 
 환경변수는 기존과 동일(OPENSEARCH_ENDPOINT / USER / PASSWORD).
 공개 인터넷에 올릴 때는 API_TOKEN(공유 토큰)·ALLOWED_ORIGINS(프론트 주소)를 준다 — auth.py 참고.
+/admin/* 은 운영자가 상태를 들여다보는 자리다. 지금은 토큰 하나뿐이라 다른 경로와 권한이 같다
+(관리자 권한이 따로 있는 것처럼 보이지만 아니다). 읽기만 하고 색인·데이터를 바꾸지 않는다.
 둘 다 없으면 로컬 개발처럼 아무 검사 없이 동작한다. 사용자별 인증은 아직 없다(#6).
 
 외부 서비스 실패는 {"detail": 안내 문구}로 돌려준다(프론트는 detail을 그대로 보여 준다):
@@ -340,6 +342,37 @@ def spellcheck(req: SpellRequest) -> SpellResponse:
         parts = res.parts or None
     return SpellResponse(**check_spelling(
         req.draft_text(), title=req.title, body=req.body, parts=parts).to_dict())
+
+
+class DictCheckResponse(BaseModel):
+    error: str                   # 비어 있으면 정상
+    index: str                   # 지금 분석기를 가져온 인덱스
+    rules: int                   # 만들어진 사용자 사전 규칙 수
+    checked: int                 # 검사한 코인 한글명 수
+    split: int                   # 지금 토큰 하나로 안 남는 이름 수(= 그 이름으로 검색이 안 됨)
+    fixed: int                   # 사전을 넣으면 하나로 붙는 이름 수
+    still: int                   # 사전을 넣어도 쪼개지는 이름 수
+    fixed_examples: list[dict]   # {name, now}
+    still_examples: list[dict]   # {name, now, after}
+
+
+@app.get("/admin/user-dictionary", response_model=DictCheckResponse)
+async def admin_user_dictionary(
+    limit: int = Query(100, ge=1, le=1000, description="검사할 코인 수. 한 개마다 분석 2회라 크면 오래 걸린다"),
+    refresh: bool = Query(False, description="빗썸에서 거래 대상을 다시 받고 검사(보통은 백그라운드 루프가 채워 둔다)"),
+) -> DictCheckResponse:
+    """코인명이 조각으로 쪼개지는지, 사용자 사전을 넣으면 고쳐지는지 센다 (#34).
+
+    CLI `check-dict` 와 같은 일을 한다. 색인·데이터를 바꾸지 않고 _analyze 로만 보므로
+    지금 검색에는 아무 영향이 없다. 인덱스를 다시 만들기 전에 값어치부터 확인하는 용도다.
+
+    CLI가 있는데 이걸 두는 이유: 진단에 필요한 OpenSearch·빗썸은 사내망이나 이 서버에서만 닿는다.
+    밖에서도 브라우저로 열어 볼 수 있어야 판단이 막히지 않는다.
+    """
+    from notice_ai.index_setup import diagnose_dictionary
+
+    # OpenSearch를 코인 수만큼 부르는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
+    return DictCheckResponse(**await asyncio.to_thread(diagnose_dictionary, limit, refresh=refresh))
 
 
 @app.get("/types")

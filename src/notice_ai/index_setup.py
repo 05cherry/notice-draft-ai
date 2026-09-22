@@ -182,14 +182,20 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
       남음    사전을 넣어도 여전히 쪼개진다(이름에 공백이 있거나 다른 이유)
 
     인덱스를 만들지 않고 _analyze 로만 보므로 지금 색인에는 아무 영향이 없다.
+
+    refresh=False 면 이미 갖고 있는 목록을 쓴다(서버는 백그라운드 루프가 채워 둔다).
+    돌려주는 모양은 항상 같다 — 실패해도 error 만 차고 나머지는 빈 값이다.
     """
     client = get_client()
     if refresh:
         coins.refresh()
     rules = user_dictionary_rules()
+    out = {"error": "", "index": config.INDEX_NAME, "rules": len(rules), "checked": 0,
+           "split": 0, "fixed": 0, "still": 0, "fixed_examples": [], "still_examples": []}
     names = sorted({c.name for c in coins.known().values() if c.name and _HANGUL_RE.search(c.name)})
     if not names:
-        return {"error": "코인 목록이 비어 있습니다. 빗썸 호출이 됐는지 확인하세요.", "rules": len(rules)}
+        out["error"] = "코인 목록이 비어 있습니다. 빗썸 호출이 됐는지 확인하세요."
+        return out
     if limit:
         names = names[:limit]
 
@@ -201,12 +207,10 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
         split.append(name)
         after = _tokens(client, text=name, rules=rules)
         (fixed if after == [name.lower()] else still).append((name, now, after))
-    return {
-        "rules": len(rules), "checked": len(names),
-        "split": len(split), "fixed": len(fixed), "still": len(still),
-        "fixed_examples": [(n, now) for n, now, _ in fixed[:15]],
-        "still_examples": [(n, now, after) for n, now, after in still[:15]],
-    }
+    out.update(checked=len(names), split=len(split), fixed=len(fixed), still=len(still),
+               fixed_examples=[{"name": n, "now": now} for n, now, _ in fixed[:20]],
+               still_examples=[{"name": n, "now": now, "after": a} for n, now, a in still[:20]])
+    return out
 
 
 def reindex_from(source: str) -> dict:

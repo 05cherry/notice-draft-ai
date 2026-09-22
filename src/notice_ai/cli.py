@@ -82,19 +82,19 @@ def main() -> None:
         from notice_ai.index_setup import diagnose_dictionary
 
         r = diagnose_dictionary(a.limit)
-        if "error" in r:
+        if r["error"]:
             print(r["error"])
         else:
             print(f"사전 규칙 {r['rules']}개 · 코인 {r['checked']}개 검사")
             print(f"  지금 쪼개짐 {r['split']}개 → 사전으로 고쳐짐 {r['fixed']}개 / 그대로 {r['still']}개")
             if r["fixed_examples"]:
                 print("\n  고쳐지는 것:")
-                for n, now in r["fixed_examples"]:
-                    print(f"    {n:<16} {' + '.join(now)}  →  {n}")
+                for e in r["fixed_examples"]:
+                    print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {e['name']}")
             if r["still_examples"]:
                 print("\n  사전을 넣어도 그대로:")
-                for n, now, after in r["still_examples"]:
-                    print(f"    {n:<16} {' + '.join(now)}  →  {' + '.join(after)}")
+                for e in r["still_examples"]:
+                    print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
 
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category

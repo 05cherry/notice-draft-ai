@@ -89,6 +89,7 @@ Bedrock 임베딩은 `~/.aws/credentials`(`aws configure`)의 자격증명을 �
 **3. 인덱스와 데이터** (CLI는 `PYTHONPATH=src`가 필요합니다)
 ```bash
 py -m notice_ai.cli check-dict                     # 코인명이 조각나는지·사용자 사전이 고치는지 확인(색인 안 건드림)
+#   서버에 올려 뒀으면 GET /admin/user-dictionary 로도 같은 걸 봅니다(밖에서 브라우저로)
 py -m notice_ai.cli setup-index                    # Nori + kNN 인덱스 생성(코인명 사용자 사전 포함)
 py -m notice_ai.cli collect                        # 공지 수집·색인 → 새 공지 임베딩까지 (--no-embed로 생략)
 py -m notice_ai.cli ingest-csv 공지데이터.csv       # 사내 CSV 색인(전체 이력·본문) → 새 공지 임베딩까지
@@ -142,6 +143,7 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `POST /spellcheck` | 맞춤법·띄어쓰기·어색한 표현 제안. **본문을 고쳐 주지 않음** | 1회 |
 | `GET /notice?url=` | 공지 1건(원문 + 초안이 참고하는 최초 버전 + 판별 유형) | 없음 |
 | `GET /health` | 생존 확인. `?deep=true`면 의존 서비스 상태 | 없음 |
+| `GET /admin/user-dictionary` | 코인명이 조각나는지·사용자 사전이 고치는지 확인. 색인 안 건드림 | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.
@@ -214,6 +216,9 @@ curl -H "X-API-Token: <토큰>" "https://<백엔드>.onrender.com/coins?q=이더
 | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | Bedrock 임베딩을 쓸 때만. 비워 두면 BM25만 동작 |
 | `ALLOWED_ORIGINS` | 프론트 주소. 예) `https://notice-draft-front.onrender.com` |
 | `API_TOKEN` | Render가 무작위로 만들어 줍니다. 대시보드에서 확인해 프론트 연결 설정에 넣습니다 |
+
+`/admin/*`은 운영자가 상태를 들여다보는 자리입니다. 읽기만 하고 색인·데이터를 바꾸지 않습니다.
+지금은 토큰이 하나뿐이라 **다른 경로와 권한이 같습니다** — 관리자 권한이 따로 있는 것처럼 보이지만 아닙니다.
 
 **접근 통제** — `API_TOKEN`이 있으면 모든 요청에 토큰을 요구합니다(`auth.py`). 토큰 없이 통과하는 것은
 `/health`와 CORS 사전 요청뿐입니다. 토큰은 세 가지 방법으로 냅니다.

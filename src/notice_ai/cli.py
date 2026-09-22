@@ -3,6 +3,7 @@
   setup-index [--recreate] [--pos-stoptags narrow|default]
                              Nori+kNN 인덱스 생성(이름은 NOTICE_INDEX, 기본 notices_v3)
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
+  check-dict                사용자 사전이 필요한지·넣으면 나아지는지 확인(색인 안 건드림)
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
@@ -40,6 +41,9 @@ def main() -> None:
     pr = sub.add_parser("reindex", help="기존 인덱스 → 현재 NOTICE_INDEX로 복사(재수집 없이 매핑 변경)")
     pr.add_argument("--source", required=True, help="원본 인덱스 이름(예: notices)")
 
+    pd = sub.add_parser("check-dict", help="사용자 사전 효과 확인(#34). 색인을 건드리지 않는다")
+    pd.add_argument("--limit", type=int, default=0, help="검사할 코인 수(0=전체)")
+
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
     pc.add_argument("--max-pages", type=int, default=None, help="카테고리당 최대 페이지(테스트용)")
@@ -74,6 +78,24 @@ def main() -> None:
         from notice_ai.index_setup import reindex_from
 
         print(reindex_from(a.source))
+    elif a.command == "check-dict":
+        from notice_ai.index_setup import diagnose_dictionary
+
+        r = diagnose_dictionary(a.limit)
+        if "error" in r:
+            print(r["error"])
+        else:
+            print(f"사전 규칙 {r['rules']}개 · 코인 {r['checked']}개 검사")
+            print(f"  지금 쪼개짐 {r['split']}개 → 사전으로 고쳐짐 {r['fixed']}개 / 그대로 {r['still']}개")
+            if r["fixed_examples"]:
+                print("\n  고쳐지는 것:")
+                for n, now in r["fixed_examples"]:
+                    print(f"    {n:<16} {' + '.join(now)}  →  {n}")
+            if r["still_examples"]:
+                print("\n  사전을 넣어도 그대로:")
+                for n, now, after in r["still_examples"]:
+                    print(f"    {n:<16} {' + '.join(now)}  →  {' + '.join(after)}")
+
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
 

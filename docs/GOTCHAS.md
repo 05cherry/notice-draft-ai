@@ -256,6 +256,19 @@
 - **Git Bash에서 `gh issue create --title "/draft …"`의 제목이 `C:/Program Files/Git/draft …`로 바뀜**
   → MSYS가 `/`로 시작하는 인자를 Windows 경로로 바꾼다(이슈 #4 제목이 이렇게 올라갔었음).
   `MSYS_NO_PATHCONV=1 gh …`로 실행하거나, 긴 텍스트는 `--body-file`처럼 파일로 넘긴다.
+## 검색 / 사용자 사전
+- **코인 한글명이 조각나 검색이 안 됨** ('네이로'→'네이'+'로', '알로라'→'알'+'로라')
+  → Nori가 사전에 없는 고유명사를 조사·어미처럼 생긴 조각으로 자른다.
+  → `index_setup.user_dictionary_rules()`가 `coins.known()`과 별칭 사전으로 사용자 사전을 만든다.
+  예전에 '관리 부담' 때문에 안 쓰기로 했던 것인데, coins.py가 빗썸에서 목록을 받아 오면서 그 부담이 사라졌다.
+- **AWS 관리형 OpenSearch에는 사전 '파일'을 못 올린다**
+  → `user_dictionary`(파일 경로)는 노드에 파일이 있어야 한다. 커스텀 패키지 업로드가 따로 필요.
+  → `user_dictionary_rules`(설정에 직접 넣는 배열)를 쓴다. 설정 크기 때문에 상한(MAX_DICT_WORDS)을 둔다.
+- **사전을 바꾸면 기존 색인은 그대로 쓸 수 없다**
+  → 분석기 설정은 색인 시점에 적용된다. 이미 색인된 문서는 옛 방식으로 쪼개져 있다.
+  → 새 인덱스를 만들고(`setup-index`) `reindex --source 옛인덱스`로 옮긴다. 재수집은 필요 없다.
+  → 넣기 전에 `check-dict`로 효과를 먼저 잰다. 인덱스를 만들지 않고 _analyze 로만 본다.
+
 ## 배포(Render) / 시간대
 - **요청문의 '내일'이 오늘 날짜로 풀림 (KST 자정~오전 9시에만)**
   → 서버가 UTC로 돈다(Render 기본). `datetime.now()`가 한국보다 하루 뒤.

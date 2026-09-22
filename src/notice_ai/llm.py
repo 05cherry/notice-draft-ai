@@ -6,6 +6,7 @@
     extract    요청문에서 값 뽑기. 짧은 JSON 하나라 싼 모델로 충분
     draft      초안 생성·수정. 품질이 곧 결과물
     evaluate   초안 평가. 생성보다 똑똑한 모델을 쓰라고 원래부터 따로 뒀다
+    spell      맞춤법 검사. 짧은 제안 목록이라 싼 모델로 충분
 역할별로 {EXTRACT,DRAFT,EVAL}_MODEL · {EXTRACT,DRAFT,EVAL}_PROVIDER 를 줄 수 있고,
 없으면 (구) OPENAI_MODEL 등과 LLM_PROVIDER 를 그대로 물려받는다(쓰던 설정이 안 깨진다).
 
@@ -41,11 +42,13 @@ LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "1"))
 # provider별 키 환경변수 이름 — 안내 문구에서 "무엇을 고쳐야 하는지" 가리키는 데 쓴다.
 KEY_ENV = {"openai": "OPENAI_API_KEY", "local": "LOCAL_LLM_KEY", "company": "COMPANY_LLM_KEY"}
 
-ROLES = ("extract", "draft", "evaluate")
+ROLES = ("extract", "draft", "evaluate", "spell")
 
 # 역할 → 환경변수 이름. evaluate 는 EVALUATE_ 가 아니라 EVAL_ 이다(쓰던 이름 그대로).
-_ROLE_PROVIDER_ENV = {"extract": "EXTRACT_PROVIDER", "draft": "DRAFT_PROVIDER", "evaluate": "EVAL_PROVIDER"}
-_ROLE_MODEL_ENV = {"extract": "EXTRACT_MODEL", "draft": "DRAFT_MODEL", "evaluate": "EVAL_MODEL"}
+_ROLE_PROVIDER_ENV = {"extract": "EXTRACT_PROVIDER", "draft": "DRAFT_PROVIDER",
+                      "evaluate": "EVAL_PROVIDER", "spell": "SPELL_PROVIDER"}
+_ROLE_MODEL_ENV = {"extract": "EXTRACT_MODEL", "draft": "DRAFT_MODEL",
+                   "evaluate": "EVAL_MODEL", "spell": "SPELL_MODEL"}
 
 # (구) provider별 모델 환경변수. 역할별 값이 없을 때 물려받는다.
 _PROVIDER_MODEL_ENV = {"openai": "OPENAI_MODEL", "local": "LOCAL_LLM_MODEL", "company": "COMPANY_LLM_MODEL"}

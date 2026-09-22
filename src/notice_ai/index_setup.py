@@ -151,9 +151,14 @@ def create_index(recreate: bool = False, pos_stoptags: list[str] | None = NARROW
             return
         client.indices.delete(index=name)
         print(f"인덱스 '{name}' 삭제.")
-    client.indices.create(index=name, body=index_body(config.EMBED_DIM, pos_stoptags))
+    rules = user_dictionary_rules()
+    if not rules:
+        logger.warning("사용자 사전이 비어 있습니다 — 코인 목록을 먼저 받아 왔는지 확인하세요"
+                       "(coins.refresh()). 이대로 만들면 코인명이 형태소로 쪼개집니다.")
+    client.indices.create(index=name, body=index_body(config.EMBED_DIM, pos_stoptags, rules))
     pos = "기본" if pos_stoptags is None else ",".join(pos_stoptags)
-    print(f"인덱스 '{name}' 생성 완료 (dim={config.EMBED_DIM}, 품사 필터 stoptags={pos}).")
+    print(f"인덱스 '{name}' 생성 완료 (dim={config.EMBED_DIM}, 품사 필터 stoptags={pos}, "
+          f"사용자 사전 {len(rules)}개).")
 
 
 def _analyzer_body(rules: list[str] | None, pos_stoptags) -> dict:

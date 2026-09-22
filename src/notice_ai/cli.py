@@ -72,8 +72,18 @@ def main() -> None:
     a = p.parse_args()
 
     if a.command == "setup-index":
-        from notice_ai.index_setup import NARROW_STOPTAGS, create_index
+        from notice_ai import coins
+        from notice_ai.index_setup import NARROW_STOPTAGS, create_index, user_dictionary_rules
 
+        # 사용자 사전은 coins.known()으로 만든다. 그 캐시는 프로세스 메모리라 CLI에서는 비어 있다
+        # (서버는 lifespan 루프가 채운다). 먼저 받아 오지 않으면 별칭 시드만으로 인덱스가 만들어져
+        # 사전이 거의 없는 인덱스가 조용히 나온다 — check-dict 결과와 딴판이 된다.
+        r = coins.refresh()
+        if not r["ok"]:
+            print(f"빗썸 호출 실패 — {r['error']}")
+            print("코인명 사용자 사전 없이 인덱스를 만들게 됩니다. 계속하려면 다시 실행하세요.")
+            return
+        print(f"빗썸 거래 대상 {r['count']}건 → 사용자 사전 {len(user_dictionary_rules())}개")
         create_index(recreate=a.recreate, pos_stoptags=NARROW_STOPTAGS if a.pos_stoptags == "narrow" else None)
     elif a.command == "reindex":
         from notice_ai.index_setup import reindex_from

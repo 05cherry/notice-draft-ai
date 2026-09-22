@@ -24,6 +24,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -409,14 +410,19 @@ async def draft_stream(req: DraftRequest) -> StreamingResponse:
 
     보내는 것:
         event: stage  {stage, label, slow, elapsed_ms, ...}   단계 시작
-        event: done   DraftResponse 와 같은 모양
+        event: done   DraftResponse + elapsed_ms(전체 걸린 시간)
         event: error  {detail, kind}
+
+    done 에 elapsed_ms 를 넣는 이유: 각 단계가 걸린 시간은 '다음 단계가 온 시각 - 이 단계가
+    온 시각'으로 구하는데, 마지막 단계 뒤에는 아무것도 오지 않는다. 흐름이 초안→검증→평가라
+    마지막은 늘 평가이고, 그래서 정작 평가 시간만 영영 알 수 없었다. 끝난 시각이 있어야 채워진다.
     결과 모양은 /draft 와 같다. 값을 만드는 코드는 한 벌이고 여기서는 알리기만 한다.
 
     브라우저의 EventSource 는 헤더를 못 붙여 토큰을 낼 수 없다. 프론트는 fetch 로 읽는다.
     """
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    started = perf_counter()
 
     def on_progress(stage: str, info: dict) -> None:
         # drafting 은 다른 스레드에서 돈다. 큐에 넣는 일만 이벤트 루프에 맡긴다.
@@ -425,7 +431,8 @@ async def draft_stream(req: DraftRequest) -> StreamingResponse:
     async def run() -> None:
         try:
             out = await asyncio.to_thread(_run, req, False, on_progress)
-            await queue.put(("done", out.model_dump()))
+            await queue.put(("done", {**out.model_dump(),
+                                      "elapsed_ms": int((perf_counter() - started) * 1000)}))
         except HTTPException as e:
             await queue.put(("error", {"detail": e.detail, "kind": "error"}))
         except LLMError as e:

@@ -348,7 +348,8 @@ class DictCheckResponse(BaseModel):
     error: str                   # 비어 있으면 정상
     index: str                   # 지금 분석기를 가져온 인덱스
     rules: int                   # 만들어진 사용자 사전 규칙 수
-    checked: int                 # 검사한 코인 한글명 수
+    total: int                   # 한글명이 있는 코인 전체 수
+    checked: int                 # 이번에 검사한 수(limit·offset 적용 뒤)
     missing: int                 # 이름이 토큰에 아예 없는 수(= 그 이름으로 검색이 안 됨). 이게 진짜 고장
     fixed: int                   # 사전을 넣으면 이름이 남는 수
     still: int                   # 사전을 넣어도 없는 수
@@ -360,7 +361,8 @@ class DictCheckResponse(BaseModel):
 
 @app.get("/admin/user-dictionary", response_model=DictCheckResponse)
 async def admin_user_dictionary(
-    limit: int = Query(100, ge=1, le=1000, description="검사할 코인 수. 한 개마다 분석 2회라 크면 오래 걸린다"),
+    limit: int = Query(0, ge=0, le=2000, description="검사할 코인 수. 0이면 전체"),
+    offset: int = Query(0, ge=0, description="앞에서부터 건너뛸 수(나눠서 훑을 때)"),
     refresh: bool = Query(False, description="빗썸에서 거래 대상을 다시 받고 검사(보통은 백그라운드 루프가 채워 둔다)"),
 ) -> DictCheckResponse:
     """코인명이 조각으로 쪼개지는지, 사용자 사전을 넣으면 고쳐지는지 센다 (#34).
@@ -368,13 +370,17 @@ async def admin_user_dictionary(
     CLI `check-dict` 와 같은 일을 한다. 색인·데이터를 바꾸지 않고 _analyze 로만 보므로
     지금 검색에는 아무 영향이 없다. 인덱스를 다시 만들기 전에 값어치부터 확인하는 용도다.
 
+    이름을 묶어서 분석하므로 전체(limit=0)를 봐도 몇 번의 호출로 끝난다. 하나씩 부르던 때는
+    500개에서 시간이 넘었다.
+
     CLI가 있는데 이걸 두는 이유: 진단에 필요한 OpenSearch·빗썸은 사내망이나 이 서버에서만 닿는다.
     밖에서도 브라우저로 열어 볼 수 있어야 판단이 막히지 않는다.
     """
     from notice_ai.index_setup import diagnose_dictionary
 
     # OpenSearch를 코인 수만큼 부르는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
-    return DictCheckResponse(**await asyncio.to_thread(diagnose_dictionary, limit, refresh=refresh))
+    return DictCheckResponse(
+        **await asyncio.to_thread(diagnose_dictionary, limit, offset=offset, refresh=refresh))
 
 
 @app.get("/types")

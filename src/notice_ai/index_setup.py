@@ -156,24 +156,59 @@ def create_index(recreate: bool = False, pos_stoptags: list[str] | None = NARROW
     print(f"인덱스 '{name}' 생성 완료 (dim={config.EMBED_DIM}, 품사 필터 stoptags={pos}).")
 
 
-def _tokens(client, *, text: str, index: str = "", analyzer: str = "",
-            rules: list[str] | None = None, pos_stoptags=NARROW_STOPTAGS) -> list[str]:
-    """한 문자열이 어떤 토큰으로 쪼개지는지. 인덱스 없이도 분석기를 즉석에서 만들어 볼 수 있다."""
-    if index:
-        body = {"analyzer": analyzer or "korean", "text": text}
-        res = client.indices.analyze(index=index, body=body)
-    else:
-        tokenizer = {"type": "nori_tokenizer", "decompound_mode": "mixed"}
-        if rules:
-            tokenizer["user_dictionary_rules"] = rules
-        pos = {"type": "nori_part_of_speech"}
-        if pos_stoptags is not None:
-            pos["stoptags"] = list(pos_stoptags)
-        res = client.indices.analyze(body={"tokenizer": tokenizer, "filter": [pos, "lowercase"], "text": text})
-    return [t["token"] for t in res.get("tokens", [])]
+def _analyzer_body(rules: list[str] | None, pos_stoptags) -> dict:
+    """인덱스 없이 즉석에서 만들어 보는 분석기(색인 설정과 같은 모양)."""
+    tokenizer = {"type": "nori_tokenizer", "decompound_mode": "mixed"}
+    if rules:
+        tokenizer["user_dictionary_rules"] = rules
+    pos = {"type": "nori_part_of_speech"}
+    if pos_stoptags is not None:
+        pos["stoptags"] = list(pos_stoptags)
+    return {"tokenizer": tokenizer, "filter": [pos, "lowercase"]}
 
 
-def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
+ANALYZE_CHUNK = 150     # 한 번에 묶어 보낼 이름 수. 너무 크면 토큰 상한에 걸린다
+
+
+def _tokens_many(client, texts: list[str], *, index: str = "", analyzer: str = "",
+                 rules: list[str] | None = None, pos_stoptags=NARROW_STOPTAGS) -> list[list[str]]:
+    """여러 문자열을 한 번에 분석해 각각의 토큰을 돌려준다.
+
+    하나씩 부르면 코인 수만큼 왕복이라 수백 개에서 시간 안에 못 끝낸다(실측: 500개 타임아웃).
+    줄바꿈으로 이어 붙여 한 번에 보내고, 토큰의 start_offset 이 어느 이름 자리에 떨어지는지로
+    가른다. 오프셋은 보낸 문자열 전체 기준이라 이 계산이 성립한다.
+
+    줄바꿈은 Nori가 낱말 경계로 보므로 이름끼리 붙지 않는다. 그래도 토큰이 두 이름에 걸치면
+    (있으면 안 되지만) 그 토큰은 버린다 — 엉뚱한 이름에 달아 놓는 것보다 낫다.
+    """
+    out: list[list[str]] = []
+    for i in range(0, len(texts), ANALYZE_CHUNK):
+        chunk = texts[i:i + ANALYZE_CHUNK]
+        spans, pos = [], 0
+        for t in chunk:
+            spans.append((pos, pos + len(t)))
+            pos += len(t) + 1                      # 줄바꿈 한 칸
+        joined = "\n".join(chunk)
+        body = {"text": joined}
+        if index:
+            body["analyzer"] = analyzer or "korean"
+            res = client.indices.analyze(index=index, body=body)
+        else:
+            res = client.indices.analyze(body={**_analyzer_body(rules, pos_stoptags), **body})
+
+        buckets: list[list[str]] = [[] for _ in chunk]
+        for tok in res.get("tokens", []):
+            start, end = tok.get("start_offset", 0), tok.get("end_offset", 0)
+            for k, (lo, hi) in enumerate(spans):
+                if lo <= start < hi:
+                    if end <= hi:                  # 두 이름에 걸친 토큰은 버린다
+                        buckets[k].append(tok["token"])
+                    break
+        out.extend(buckets)
+    return out
+
+
+def diagnose_dictionary(limit: int = 0, *, offset: int = 0, refresh: bool = True) -> dict:
     """사용자 사전이 실제로 필요한지, 넣으면 나아지는지 센다 (#34).
 
     코인 한글명 하나하나를 지금 인덱스의 분석기와 사전을 넣은 분석기로 각각 쪼개 보고 견준다.
@@ -198,22 +233,23 @@ def diagnose_dictionary(limit: int = 0, *, refresh: bool = True) -> dict:
     if refresh:
         coins.refresh()
     rules = user_dictionary_rules()
-    out = {"error": "", "index": config.INDEX_NAME, "rules": len(rules), "checked": 0,
+    out = {"error": "", "index": config.INDEX_NAME, "rules": len(rules), "total": 0, "checked": 0,
            "missing": 0, "fixed": 0, "still": 0, "narrowed": 0,
            "fixed_examples": [], "still_examples": [], "narrowed_examples": []}
     names = sorted({c.name for c in coins.known().values() if c.name and _HANGUL_RE.search(c.name)})
     if not names:
         out["error"] = "코인 목록이 비어 있습니다. 빗썸 호출이 됐는지 확인하세요."
         return out
-    if limit:
-        names = names[:limit]
+    out["total"] = len(names)
+    names = names[offset:offset + limit] if limit else names[offset:]
+
+    befores = _tokens_many(client, names, index=config.INDEX_NAME)
+    afters = _tokens_many(client, names, rules=rules)
 
     fixed, still, narrowed = [], [], []
     missing = 0
-    for name in names:
+    for name, now, after in zip(names, befores, afters):
         low = name.lower()
-        now = _tokens(client, text=name, index=config.INDEX_NAME)
-        after = _tokens(client, text=name, rules=rules)
         if low not in now:                       # 이름이 통째로 사라졌다 = 검색 불가
             missing += 1
             (fixed if low in after else still).append((name, now, after))

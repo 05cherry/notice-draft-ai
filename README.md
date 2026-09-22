@@ -143,7 +143,7 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `POST /spellcheck` | 맞춤법·띄어쓰기·어색한 표현 제안. **본문을 고쳐 주지 않음** | 1회 |
 | `GET /notice?url=` | 공지 1건(원문 + 초안이 참고하는 최초 버전 + 판별 유형) | 없음 |
 | `GET /health` | 생존 확인. `?deep=true`면 의존 서비스 상태 | 없음 |
-| `GET /admin/user-dictionary` | 코인명이 조각나는지·사용자 사전이 고치는지 확인. 색인 안 건드림 | 없음 |
+| `GET /admin/user-dictionary` | 코인명이 검색되는지·사용자 사전이 고치는지 확인(`limit`·`offset`). 색인 안 건드림 | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.

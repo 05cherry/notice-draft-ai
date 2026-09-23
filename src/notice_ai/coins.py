@@ -235,12 +235,34 @@ def refresh(*, target: MemoryCoinStore | None = None) -> dict:
 
 # ---- 백그라운드 루프(FastAPI lifespan이 켜고 끈다) ----
 _task: asyncio.Task | None = None
+_listeners: list = []
+
+
+def on_change(fn) -> None:
+    """갱신이 끝날 때마다 부를 함수를 등록한다(refresh 결과 dict를 받는다).
+
+    코인 목록이 인덱스 사전보다 앞서 나가는지 보는 쪽(dictionary)이 여기에 붙는다.
+    coins가 인덱스를 알 필요는 없으므로 방향을 이렇게 둔다.
+    """
+    if fn not in _listeners:
+        _listeners.append(fn)
+
+
+def _refresh_and_notify() -> dict:
+    """스레드에서 돈다. 등록된 쪽이 오래 걸려도(재색인) 이벤트 루프는 안 막힌다."""
+    r = refresh()
+    for fn in list(_listeners):
+        try:
+            fn(r)
+        except Exception:
+            logger.exception("코인 갱신 후처리 실패 — 목록 갱신 자체는 계속합니다.")
+    return r
 
 
 async def _loop(interval: float) -> None:
     while True:
         # refresh는 동기(httpx)라서 이벤트 루프를 막지 않게 스레드로 넘긴다.
-        await asyncio.to_thread(refresh)
+        await asyncio.to_thread(_refresh_and_notify)
         await asyncio.sleep(interval)
 
 

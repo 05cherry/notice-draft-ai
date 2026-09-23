@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import time
 
-from notice_ai import aliases, config
+from notice_ai import aliases, config, index_ref
 from notice_ai.opensearch_client import get_client
 from notice_ai.scraper_client import (
     CATEGORY_IDS,
@@ -94,14 +94,14 @@ def collect_category(
         for item in notices:
             doc = _list_item_doc(item)
             url = doc["source_url"]
-            if os_client.exists(index=config.INDEX_NAME, id=url):
+            if os_client.exists(index=index_ref.target(), id=url):
                 continue  # 이미 있음 → 상세 요청도 생략
             if fetch_body:
                 data = _retry_on_429(lambda i=item: scraper.detail(i["id"]))
                 doc["raw_text"] = html_to_text(data.get("content", ""))
             else:
                 doc["raw_text"] = ""
-            os_client.index(index=config.INDEX_NAME, id=url, body=doc)
+            os_client.index(index=index_ref.target(), id=url, body=doc)
             saved += 1
             logger.info("색인 [%s] %s", name, doc["title"])
         if max_pages and page >= max_pages:

@@ -4,6 +4,8 @@
                              Nori+kNN 인덱스 생성(이름은 NOTICE_INDEX, 기본 notices_v3)
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
   check-dict                사용자 사전이 필요한지·넣으면 나아지는지 확인(색인 안 건드림)
+  alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
+  rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
@@ -44,6 +46,11 @@ def main() -> None:
     pd = sub.add_parser("check-dict", help="사용자 사전 효과 확인(#34). 색인을 건드리지 않는다")
     pd.add_argument("--limit", type=int, default=0, help="검사할 코인 수(0=전체)")
     pd.add_argument("--offset", type=int, default=0, help="앞에서부터 건너뛸 수")
+
+    pa = sub.add_parser("alias", help="별칭을 만들거나 돌린다(#34 자동 갱신의 전제)")
+    pa.add_argument("--index", default="", help="가리킬 인덱스(생략 시 NOTICE_INDEX)")
+
+    sub.add_parser("rebuild-dict", help="사전 갱신 → 새 인덱스 → 별칭 전환")
 
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
@@ -113,6 +120,19 @@ def main() -> None:
                 for e in r["narrowed_examples"]:
                     print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
 
+    elif a.command == "alias":
+        from notice_ai import config, index_ref
+
+        r = index_ref.point_at(a.index or config.INDEX_NAME)
+        print(f"별칭 '{r['alias']}' → {r['now']}" + (f"  (전: {', '.join(r['before']) or '없음'})"))
+    elif a.command == "rebuild-dict":
+        from notice_ai import dictionary
+
+        r = dictionary.rebuild(reason="CLI")
+        print(("완료" if r["ok"] else f"안 됨({r['reason']})") + f" — {r['message']}")
+        if r["dest"]:
+            print(f"  {r['source'] or '(원본)'} → {r['dest']}  문서 {r['docs']}건 · 사전 {r['rules']}개"
+                  f" · {r['took_sec']}초")
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
 

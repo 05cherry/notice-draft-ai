@@ -15,7 +15,7 @@ import html
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
-from notice_ai import config, fusion
+from notice_ai import config, fusion, index_ref
 from notice_ai.opensearch_client import get_client
 
 
@@ -97,7 +97,7 @@ def bm25_search(
     if sort in ("score", "recent"):
         body["sort"] = ["_score", _RECENT] if sort == "score" else [_RECENT, "_score"]
         body["track_scores"] = True   # sort를 주면 _score가 비는 것을 방지
-    res = get_client().search(index=config.INDEX_NAME, body=body)
+    res = get_client().search(index=index_ref.target(), body=body)
     return [_hit(h, h["_score"] or 0.0) for h in res["hits"]["hits"]]
 
 
@@ -107,7 +107,7 @@ def vector_search(qvec: list[float], filters: dict, size: int = 30) -> list[Sear
     if fc:
         knn["embedding"]["filter"] = {"bool": {"filter": fc}}
     body = {"size": size, "_source": {"excludes": ["embedding"]}, "query": {"knn": knn}}
-    res = get_client().search(index=config.INDEX_NAME, body=body)
+    res = get_client().search(index=index_ref.target(), body=body)
     return [_hit(h, h["_score"]) for h in res["hits"]["hits"]]
 
 
@@ -116,7 +116,7 @@ def vector_similarity(qvec: list[float], ids: list[str]) -> dict[str, float]:
     BM25로만 찾은 후보에도 의미 점수를 매기려고 쓴다. 임베딩 없는 공지는 결과에서 빠진다."""
     if not ids:
         return {}
-    res = get_client().mget(index=config.INDEX_NAME, body={"ids": list(ids)}, _source_includes=["embedding"])
+    res = get_client().mget(index=index_ref.target(), body={"ids": list(ids)}, _source_includes=["embedding"])
     out = {}
     for d in res["docs"]:
         vec = (d.get("_source") or {}).get("embedding")
@@ -243,7 +243,7 @@ def search_page(
         raise ValueError(f"sort는 {', '.join(SEARCH_SORTS)} 중 하나: {sort}")
     client = get_client()
     text = _text_query(query)
-    first = client.search(index=config.INDEX_NAME, body={"size": 1, "query": text, "_source": False})
+    first = client.search(index=index_ref.target(), body={"size": 1, "query": text, "_source": False})
     top = first["hits"]["hits"][0]["_score"] if first["hits"]["hits"] else 0.0
     out = SearchPage(query, 0, page, size, sort, round(top * SEARCH_MIN_RATIO, 4))
     cat_filter = _filter_clauses({"category": category} if category else {})
@@ -258,7 +258,7 @@ def search_page(
         }
         if cat_filter:
             body["post_filter"] = {"bool": {"filter": cat_filter}}
-        res = client.search(index=config.INDEX_NAME, body=body)
+        res = client.search(index=index_ref.target(), body=body)
         out.total = res["hits"]["total"]["value"]
         out.hits = [replace(_hit(h, h["_score"] or 0.0), snippet=_snippet(h)) for h in res["hits"]["hits"]]
         out.categories = {b["key"]: b["doc_count"] for b in res["aggregations"]["categories"]["buckets"]}

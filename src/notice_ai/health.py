@@ -26,10 +26,13 @@ def check(*, embed: Callable | None = None, client=None) -> dict:
             from notice_ai.opensearch_client import get_client
 
             client = get_client()
-        idx = config.INDEX_NAME
+        from notice_ai import index_ref
+
+        idx = index_ref.target(client)
         total = client.count(index=idx)["count"]
         with_vec = client.count(index=idx, body={"query": {"exists": {"field": "embedding"}}})["count"]
-        out["opensearch"] = {"ok": True, "index": idx, "docs": total, "with_embedding": with_vec}
+        out["opensearch"] = {"ok": True, "index": idx, "docs": total, "with_embedding": with_vec,
+                             "points_at": index_ref.concrete(client)}
     except Exception as e:
         out["opensearch"] = {"ok": False, "error": _err(e)}
 

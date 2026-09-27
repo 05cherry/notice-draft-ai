@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import re
 
-from notice_ai import aliases, coins, config
+from notice_ai import aliases, coins, config, index_ref
 from notice_ai.opensearch_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -142,9 +142,10 @@ def index_body(dim: int, pos_stoptags: list[str] | None = NARROW_STOPTAGS,
     }
 
 
-def create_index(recreate: bool = False, pos_stoptags: list[str] | None = NARROW_STOPTAGS) -> None:
+def create_index(recreate: bool = False, pos_stoptags: list[str] | None = NARROW_STOPTAGS,
+                 name: str = "") -> None:
     client = get_client()
-    name = config.INDEX_NAME
+    name = name or config.INDEX_NAME
     if client.indices.exists(index=name):
         if not recreate:
             print(f"인덱스 '{name}' 이미 존재. recreate=True로 재생성 가능.")
@@ -238,7 +239,12 @@ def diagnose_dictionary(limit: int = 0, *, offset: int = 0, refresh: bool = True
     if refresh:
         coins.refresh()
     rules = user_dictionary_rules()
-    out = {"error": "", "index": config.INDEX_NAME, "rules": len(rules), "total": 0, "checked": 0,
+    live = index_ref.target(client)
+    try:
+        points_at = index_ref.concrete(client)
+    except Exception as e:                      # 별칭이 여러 인덱스를 가리키는 등 — 진단은 계속한다
+        points_at = f"({type(e).__name__})"
+    out = {"error": "", "index": live, "points_at": points_at, "rules": len(rules), "total": 0, "checked": 0,
            "missing": 0, "fixed": 0, "still": 0, "narrowed": 0,
            "fixed_examples": [], "still_examples": [], "narrowed_examples": []}
     names = sorted({c.name for c in coins.known().values() if c.name and _HANGUL_RE.search(c.name)})
@@ -248,7 +254,7 @@ def diagnose_dictionary(limit: int = 0, *, offset: int = 0, refresh: bool = True
     out["total"] = len(names)
     names = names[offset:offset + limit] if limit else names[offset:]
 
-    befores = _tokens_many(client, names, index=config.INDEX_NAME)
+    befores = _tokens_many(client, names, index=live)
     afters = _tokens_many(client, names, rules=rules)
 
     fixed, still, narrowed = [], [], []
@@ -268,13 +274,13 @@ def diagnose_dictionary(limit: int = 0, *, offset: int = 0, refresh: bool = True
     return out
 
 
-def reindex_from(source: str) -> dict:
-    """기존 인덱스의 문서를 현재 인덱스(NOTICE_INDEX)로 복사한다. 원본은 건드리지 않는다.
+def reindex_from(source: str, dest: str = "") -> dict:
+    """기존 인덱스의 문서를 dest(기본 NOTICE_INDEX)로 복사한다. 원본은 건드리지 않는다.
 
     매핑·분석기를 바꿀 때 재수집(스크래핑) 없이 새 인덱스를 채우는 용도.
     """
     client = get_client()
-    dest = config.INDEX_NAME
+    dest = dest or config.INDEX_NAME
     if source == dest:
         raise ValueError("원본과 대상 인덱스가 같습니다. NOTICE_INDEX를 새 인덱스 이름으로 설정하세요.")
     if not client.indices.exists(index=dest):

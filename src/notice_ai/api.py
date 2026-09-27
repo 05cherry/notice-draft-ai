@@ -35,6 +35,7 @@ from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, Field
 
 from notice_ai import coins as coin_cache
+from notice_ai import config
 from notice_ai.auth import install as install_auth
 from notice_ai.config import ConfigError
 from notice_ai.llm import LLMError
@@ -48,8 +49,15 @@ _WEB = Path(__file__).resolve().parent / "web"
 async def lifespan(_: FastAPI):
     """서버가 사는 동안 빗썸 거래 대상 목록을 10분마다 받아 둔다(notice_ai.coins).
 
+    갱신할 때마다 dictionary가 끼어들어, 새로 상장된 코인 이름이 지금 인덱스에서 쪼개지는지
+    본다. 쪼개지면(=그 이름으로 검색이 안 되면) 사전을 다시 만들어 새 인덱스로 옮기고 별칭을
+    돌린다. 옮기는 동안에도 검색은 옛 인덱스가 받으므로 끊기지 않는다.
+
     빗썸이 안 되더라도 서버는 그대로 뜬다 — 코인 이름 자동 채우기만 쉬고, 수기 입력은 계속 된다.
     """
+    from notice_ai import dictionary
+
+    coin_cache.on_change(dictionary.on_coins_changed)   # 신규 상장 → 사전 뒤처짐 감지 → 재색인
     coin_cache.start()
     try:
         yield
@@ -346,7 +354,8 @@ def spellcheck(req: SpellRequest) -> SpellResponse:
 
 class DictCheckResponse(BaseModel):
     error: str                   # 비어 있으면 정상
-    index: str                   # 지금 분석기를 가져온 인덱스
+    index: str                   # 지금 분석기를 가져온 이름(별칭이 있으면 별칭)
+    points_at: str = ""          # 그 별칭이 실제로 가리키는 인덱스
     rules: int                   # 만들어진 사용자 사전 규칙 수
     total: int                   # 한글명이 있는 코인 전체 수
     checked: int                 # 이번에 검사한 수(limit·offset 적용 뒤)
@@ -381,6 +390,81 @@ async def admin_user_dictionary(
     # OpenSearch를 코인 수만큼 부르는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
     return DictCheckResponse(
         **await asyncio.to_thread(diagnose_dictionary, limit, offset=offset, refresh=refresh))
+
+
+class DictAutoResponse(BaseModel):
+    auto: bool                   # 신규 상장 감지 시 자동 재색인 여부(DICT_AUTO_REBUILD)
+    min_sec: float               # 재색인 최소 간격(DICT_REBUILD_MIN_SEC)
+    running: bool                # 지금 재색인이 도는 중인지
+    stale: list[str]             # 사전에 없어 검색이 안 되는 코인 이름
+    stale_since: str             # 그렇게 된 시각(KST)
+    last_checked: str            # 마지막으로 확인한 시각(KST)
+    last_rebuild: dict | None    # 마지막 재색인 결과(성공·실패 모두)
+    alias: str                   # 쓰고 있는 별칭 이름. 비어 있으면 별칭 없이 도는 중
+
+
+@app.get("/admin/dictionary/status", response_model=DictAutoResponse)
+def admin_dictionary_status() -> DictAutoResponse:
+    """사전 자동 갱신이 지금 어떤 상태인지. 검색 서버를 부르지 않아 빠르다.
+
+    stale 이 비어 있으면 사전이 코인 목록을 따라잡은 것이다. 뭔가 남아 있는데 last_rebuild 가
+    실패로 끝나 있으면 그 message 가 이유다.
+    """
+    from notice_ai import dictionary
+
+    return DictAutoResponse(**dictionary.state(), alias=config.INDEX_ALIAS)
+
+
+class RebuildResponse(BaseModel):
+    ok: bool
+    reason: str                  # 실패 종류(빈 문자열이면 성공)
+    message: str
+    source: str = ""             # 옮겨 온 인덱스
+    dest: str = ""               # 새로 만든 인덱스
+    rules: int = 0               # 새 인덱스에 들어간 사전 규칙 수
+    docs: int = 0                # 새 인덱스의 문서 수
+    copied: int = 0
+    at: str = ""
+    trigger: str = ""
+    took_sec: float = 0
+
+
+@app.post("/admin/dictionary/rebuild", response_model=RebuildResponse)
+async def admin_dictionary_rebuild() -> RebuildResponse:
+    """지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭을 돌린다.
+
+    자동 갱신이 꺼져 있거나(DICT_AUTO_REBUILD=0), 최소 간격을 기다리지 않고 지금 당장
+    돌리고 싶을 때. 실패하면 별칭을 건드리지 않으므로 검색은 옛 인덱스가 계속 받는다.
+
+    문서 수에 따라 몇 분 걸릴 수 있다. 응답이 끊겨도 서버에서는 계속 도니
+    /admin/dictionary/status 로 결과를 본다.
+    """
+    from notice_ai import dictionary
+
+    return RebuildResponse(**await asyncio.to_thread(dictionary.rebuild, reason="수동 호출"))
+
+
+class AliasResponse(BaseModel):
+    alias: str
+    before: list[str]            # 돌리기 전에 가리키던 인덱스들
+    now: str                     # 지금 가리키는 인덱스
+
+
+@app.post("/admin/dictionary/alias", response_model=AliasResponse)
+async def admin_dictionary_alias(
+    index: str = Query("", description="별칭이 가리킬 인덱스. 비우면 지금 NOTICE_INDEX"),
+) -> AliasResponse:
+    """별칭을 만들거나 다른 인덱스로 돌린다. 자동 갱신을 쓰려면 한 번은 있어야 한다.
+
+    이 호출 전까지는 NOTICE_INDEX를 그대로 쓰므로, 만들기 전에도 서버는 전과 똑같이 돈다.
+    되돌리려면 옛 인덱스 이름으로 다시 부르면 된다(환경변수를 고칠 필요가 없다).
+    """
+    from notice_ai import index_ref
+
+    try:
+        return AliasResponse(**await asyncio.to_thread(index_ref.point_at, index or config.INDEX_NAME))
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/types")

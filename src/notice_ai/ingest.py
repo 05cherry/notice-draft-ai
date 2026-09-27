@@ -16,7 +16,7 @@ import csv
 import hashlib
 import logging
 
-from notice_ai import aliases, config
+from notice_ai import aliases, config, index_ref
 from notice_ai.opensearch_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -70,9 +70,9 @@ def ingest_csv(path: str) -> int:
             if not doc["title"]:
                 continue
             _id = _doc_id(doc["source_url"], doc["title"])
-            client.index(index=config.INDEX_NAME, id=_id, body=doc)
+            client.index(index=index_ref.target(), id=_id, body=doc)
             saved += 1
             if saved % 200 == 0:
                 logger.info("CSV 색인 %d건", saved)
-    client.indices.refresh(index=config.INDEX_NAME)
+    client.indices.refresh(index=index_ref.target())
     return saved

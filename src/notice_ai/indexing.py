@@ -10,7 +10,7 @@ import logging
 
 from opensearchpy import helpers
 
-from notice_ai import config
+from notice_ai import config, index_ref
 from notice_ai.embeddings import EMBED_MODEL, embed_documents
 from notice_ai.opensearch_client import get_client
 
@@ -24,7 +24,7 @@ def _pending(client, size: int, skip_ids: set[str]) -> list[dict]:
     if skip_ids:
         must_not.append({"ids": {"values": sorted(skip_ids)}})
     q = {"size": size, "query": {"bool": {"must_not": must_not}}, "_source": ["title", "raw_text"]}
-    res = client.search(index=config.INDEX_NAME, body=q)
+    res = client.search(index=index_ref.target(), body=q)
     return res["hits"]["hits"]
 
 
@@ -46,7 +46,7 @@ def embed_missing(batch: int = 50, limit: int | None = None) -> int:
                 failed.add(h["_id"])
                 logger.warning("임베딩 실패 %s: %s", h["_id"], str(e)[:120])
                 continue
-            actions.append({"_op_type": "update", "_index": config.INDEX_NAME, "_id": h["_id"],
+            actions.append({"_op_type": "update", "_index": index_ref.target(), "_id": h["_id"],
                             "doc": {"embedding": vec, "embed_model": EMBED_MODEL}})
         if actions:
             helpers.bulk(client, actions, refresh=True)

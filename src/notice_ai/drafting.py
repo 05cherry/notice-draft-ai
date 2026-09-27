@@ -23,7 +23,7 @@ from pathlib import Path
 from time import perf_counter as _perf
 from typing import Callable
 
-from notice_ai import config, factcheck
+from notice_ai import config, factcheck, index_ref
 from notice_ai.evaluator import Evaluation, evaluate
 from notice_ai.llm import LLM, for_role
 from notice_ai.notice_types import (
@@ -345,7 +345,7 @@ def _fetch_notice(source_url: str) -> dict | None:
     from notice_ai.opensearch_client import get_client
 
     try:
-        return get_client().get(index=config.INDEX_NAME, id=source_url)["_source"]
+        return get_client().get(index=index_ref.target(), id=source_url)["_source"]
     except NotFoundError:
         return None
 

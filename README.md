@@ -61,7 +61,7 @@ src/notice_ai/
   prompts/             common.txt + category/<카테고리>.txt + subtype/<카테고리>/<유형>.txt
   web/search.html      간단한 검색 화면(/ui)
 data/                  categories.json(카테고리 ID) · coin_aliases.json(코인 별칭)
-docs/                  PIPELINE.md(규칙집) · GOTCHAS.md(겪은 함정)
+docs/                  PIPELINE.md(규칙집) · GOTCHAS.md(겪은 함정) · INDEX_OPS.md(인덱스 운영)
 ```
 
 ## 빠른 시작
@@ -195,6 +195,7 @@ curl -H "X-API-Token: <토큰>" "https://<백엔드>.onrender.com/coins?q=이더
 ## 문서
 - [docs/PIPELINE.md](docs/PIPELINE.md) — 규칙집. 코드의 기준값을 바꾸면 함께 고칩니다.
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — 겪은 함정과 해결. 막히면 먼저 확인하고, 새로 겪은 것은 여기에 추가합니다.
+- [docs/INDEX_OPS.md](docs/INDEX_OPS.md) — 인덱스 운영. 별칭·사전 갱신·되돌리기를 `/admin`으로 하는 법.
 
 ## 테스트
 `tests/`(오프라인 단위 테스트, 검색·초안 평가 스크립트)는 아직 저장소에 포함하지 않았습니다(`.gitignore`).

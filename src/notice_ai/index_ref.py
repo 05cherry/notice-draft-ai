@@ -90,16 +90,35 @@ def concrete(client=None) -> str:
     return config.INDEX_NAME
 
 
+def is_real_index(name: str, client=None) -> bool:
+    """이 이름이 '진짜 인덱스'인가 — 별칭이면 False.
+
+    indices.exists(HEAD /이름)로는 가릴 수 없다. 그 API는 별칭도 200을 주기 때문에
+    별칭을 한 번 만들고 나면 '이미 인덱스로 있다'고 잘못 말하게 된다.
+    indices.get 은 별칭으로 물어도 가리키는 진짜 인덱스 이름을 열쇠로 돌려주므로,
+    물어본 이름이 열쇠에 그대로 있으면 그것이 진짜 인덱스다.
+    """
+    c = client or _client()
+    try:
+        return name in (c.indices.get(index=name) or {})
+    except Exception:
+        return False                                  # 없으면 없는 것
+
+
 def point_at(index: str, client=None) -> dict:
-    """별칭을 이 인덱스로 돌린다(원자적). 별칭이 없으면 새로 만든다."""
+    """별칭을 이 인덱스로 돌린다(원자적). 별칭이 없으면 새로 만든다.
+
+    여러 번 불러도 안전하다. 이미 그 인덱스를 가리키고 있으면 아무것도 바꾸지 않는다.
+    """
     c = client or _client()
     alias = config.INDEX_ALIAS
     if not alias:
         raise RuntimeError("NOTICE_ALIAS가 비어 있어 별칭을 쓸 수 없습니다.")
     if alias == index:
         raise ValueError(f"별칭과 인덱스 이름이 같습니다({alias}). NOTICE_ALIAS를 다른 이름으로 두세요.")
-    if c.indices.exists(index=alias):
-        raise RuntimeError(f"'{alias}'가 이미 인덱스로 있습니다. 별칭은 인덱스와 이름이 겹칠 수 없습니다.")
+    if is_real_index(alias, c):
+        raise RuntimeError(f"'{alias}'가 이미 인덱스로 있습니다. 별칭은 인덱스와 이름이 겹칠 수 없습니다. "
+                           f"NOTICE_ALIAS를 다른 이름으로 두거나 그 인덱스를 정리하세요.")
 
     before = sorted(c.indices.get_alias(name=alias)) if c.indices.exists_alias(name=alias) else []
     actions = [{"remove": {"index": i, "alias": alias}} for i in before if i != index]

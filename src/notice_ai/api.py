@@ -71,6 +71,24 @@ app = FastAPI(title="notice-draft-ai API", version="0.1", lifespan=lifespan)
 # 둘 다 환경변수로만 켜진다 — ALLOWED_ORIGINS 없으면 전부 허용, API_TOKEN 없으면 검사 없음(로컬 그대로).
 install_auth(app)
 
+
+@app.middleware("http")
+async def _utf8_json(request: Request, call_next):
+    """JSON 응답에 charset=utf-8 을 붙인다.
+
+    application/json 은 규격상 UTF-8이라 charset을 안 붙이는 게 맞지만, 그러면 브라우저가
+    스스로 인코딩을 추측한다. 모바일 브라우저는 한국어 지역 설정에서 EUC-KR로 찍어
+    안내 문구가 깨진다('...가 이미 인덱스로' → '媛� �대� �몃뜳��'). 오류 문구를
+    읽으라고 만들어 놓고 못 읽게 두는 셈이라 명시한다.
+
+    가장 바깥에 둬서 401·422·500 같은 것까지 다 지나가게 한다.
+    """
+    res = await call_next(request)
+    ct = res.headers.get("content-type", "")
+    if ct.startswith("application/json") and "charset" not in ct.lower():
+        res.headers["content-type"] = f"{ct}; charset=utf-8"
+    return res
+
 _LLM_STATUS = {"timeout": 504, "config": 503}   # 나머지(rate_limit·auth·error)는 502
 
 

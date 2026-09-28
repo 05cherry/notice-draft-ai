@@ -95,16 +95,24 @@ def install(app: FastAPI) -> None:
             if _open(request):
                 return await call_next(request)
 
-            # 브라우저로 연 경우: ?token=... 을 쿠키로 옮기고 주소에서 지운다
-            # (주소창·접속 기록·리퍼러에 토큰이 남지 않게).
             if (q := request.query_params.get("token")) and secrets.compare_digest(q, token):
-                # 보낼 곳은 경로만 적는다. 절대 주소로 적으면 프록시 뒤에서 scheme이 http로 보여
-                # http:// 로 돌려보내고, 브라우저가 그 평문 요청에 토큰 쿠키를 실어 보낸다.
-                rest = request.url.remove_query_params("token")
-                res = RedirectResponse(rest.path + (f"?{rest.query}" if rest.query else ""), status_code=303)
-                res.set_cookie(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE, httponly=True,
-                               samesite="lax", secure=_https(request))
-                return res
+                # 브라우저로 연 경우(GET): ?token=... 을 쿠키로 옮기고 주소에서 지운다
+                # (주소창·접속 기록·리퍼러에 토큰이 남지 않게).
+                #
+                # GET일 때만 그렇게 한다. 303은 본문 있는 요청을 GET으로 바꿔 버리므로
+                # POST를 이 길로 보내면 메서드가 갈려 405가 된다(curl -X POST ...?token= 이
+                # 조용히 아무것도 안 하던 이유). 주소창에 남는 문제는 GET에만 있으니,
+                # 나머지는 토큰만 확인하고 그대로 통과시킨다.
+                if request.method == "GET":
+                    # 보낼 곳은 경로만 적는다. 절대 주소로 적으면 프록시 뒤에서 scheme이 http로 보여
+                    # http:// 로 돌려보내고, 브라우저가 그 평문 요청에 토큰 쿠키를 실어 보낸다.
+                    rest = request.url.remove_query_params("token")
+                    res = RedirectResponse(rest.path + (f"?{rest.query}" if rest.query else ""),
+                                           status_code=303)
+                    res.set_cookie(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE, httponly=True,
+                                   samesite="lax", secure=_https(request))
+                    return res
+                return await call_next(request)
 
             given = _presented(request)
             if given and secrets.compare_digest(given, token):

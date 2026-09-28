@@ -450,7 +450,7 @@ class AliasResponse(BaseModel):
     now: str                     # 지금 가리키는 인덱스
 
 
-@app.post("/admin/dictionary/alias", response_model=AliasResponse)
+@app.api_route("/admin/dictionary/alias", methods=["GET", "POST"], response_model=AliasResponse)
 async def admin_dictionary_alias(
     index: str = Query("", description="별칭이 가리킬 인덱스. 비우면 지금 NOTICE_INDEX"),
 ) -> AliasResponse:
@@ -458,6 +458,11 @@ async def admin_dictionary_alias(
 
     이 호출 전까지는 NOTICE_INDEX를 그대로 쓰므로, 만들기 전에도 서버는 전과 똑같이 돈다.
     되돌리려면 옛 인덱스 이름으로 다시 부르면 된다(환경변수를 고칠 필요가 없다).
+
+    GET도 받는다. 초기 설정은 밖에서 브라우저 주소창으로 해야 할 때가 있는데 거기선 POST를
+    못 보낸다. 이것만 예외로 두는 이유는, 같은 인덱스를 다시 가리켜도 결과가 같고(멱등)
+    데이터를 만들지도 지우지도 않아서다. 같은 자리의 rebuild는 인덱스를 새로 만들고 문서를
+    통째로 복사하므로 POST로만 둔다 — 링크가 어딘가 남아 잘못 눌리면 안 된다.
     """
     from notice_ai import index_ref
 

@@ -4,6 +4,7 @@
                              Nori+kNN 인덱스 생성(이름은 NOTICE_INDEX, 기본 notices_v3)
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
   check-dict                사용자 사전이 필요한지·넣으면 나아지는지 확인(색인 안 건드림)
+  check-subtype              형제 유형(에어드랍 완료/예정) 판별이 얼마나 맞는지 확인
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
@@ -46,6 +47,11 @@ def main() -> None:
     pd = sub.add_parser("check-dict", help="사용자 사전 효과 확인(#34). 색인을 건드리지 않는다")
     pd.add_argument("--limit", type=int, default=0, help="검사할 코인 수(0=전체)")
     pd.add_argument("--offset", type=int, default=0, help="앞에서부터 건너뛸 수")
+
+    pt = sub.add_parser("check-subtype", help="형제 유형 판별 확인(#38). 색인을 건드리지 않는다")
+    pt.add_argument("--category", default="", help="카테고리 하나만(생략 시 전부)")
+    pt.add_argument("--limit", type=int, default=0, help="훑을 공지 수(0=전체)")
+    pt.add_argument("--offset", type=int, default=0)
 
     pa = sub.add_parser("alias", help="별칭을 만들거나 돌린다(#34 자동 갱신의 전제)")
     pa.add_argument("--index", default="", help="가리킬 인덱스(생략 시 NOTICE_INDEX)")
@@ -120,6 +126,29 @@ def main() -> None:
                 for e in r["narrowed_examples"]:
                     print(f"    {e['name']:<16} {' + '.join(e['now'])}  →  {' + '.join(e['after'])}")
 
+    elif a.command == "check-subtype":
+        from notice_ai.subtype_check import diagnose
+
+        r = diagnose(a.category, a.limit, a.offset)
+        if r["error"]:
+            print(r["error"])
+        else:
+            for c, fams in r["families"].items():
+                print(f"{c}: " + " / ".join(f"{k}={', '.join(v)}" for k, v in fams.items()))
+            print(f"공지 {r['checked']}건 중 본문으로 갈리는 유형 {r['in_family']}건")
+            print(f"  제목과 본문이 같은 유형      {r['agree']}건")
+            print(f"  본문 보고 형제로 간 것       {r['sibling']}건 (규칙이 의도대로 동작)")
+            print(f"  general로 떨어진 것          {r['fell_to_general']}건"
+                  f" → 본문 비어서 {r['empty_body']} / 새 표현 {r['novel_wording']}")
+            if r["novel_examples"]:
+                print("\n  새 표현(규칙에 넣으면 고쳐짐):")
+                for e in r["novel_examples"]:
+                    print(f"    [{e['by_title']}] {e['title'][:40]}")
+                    print(f"      {e['body'][:100]}")
+            if r["empty_examples"]:
+                print(f"\n  본문이 빈 것(규칙으로 못 고침) 예시 {len(r['empty_examples'])}건:")
+                for e in r["empty_examples"]:
+                    print(f"    [{e['by_title']}] {e['title'][:60]}")
     elif a.command == "alias":
         from notice_ai import config, index_ref
 

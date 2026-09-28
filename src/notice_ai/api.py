@@ -490,6 +490,46 @@ async def admin_dictionary_alias(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+class SubtypeCheckResponse(BaseModel):
+    error: str
+    index: str
+    categories: list[str]              # 본문으로 갈리는 유형이 있는 카테고리
+    families: dict[str, dict]          # {카테고리: {family: [subtype...]}}
+    checked: int                       # 훑은 공지 수(전체)
+    in_family: int                     # 그중 제목이 '본문으로 갈리는 유형'에 걸린 것. 아래는 이것의 내역
+    agree: int                         # 제목으로 고른 유형 = 본문까지 본 유형
+    sibling: int                       # 본문 보고 형제 유형으로 간 것(규칙이 의도대로 동작)
+    fell_to_general: int               # 제목은 잡히는데 어느 본문 규칙에도 안 맞아 general
+    empty_body: int                    #   그중 본문이 비어 있어서(규칙을 늘려도 안 고쳐짐)
+    novel_wording: int                 #   그중 본문은 있는데 표현이 새로워서(규칙에 넣으면 고쳐짐)
+    empty_examples: list[dict]
+    novel_examples: list[dict]
+    sibling_examples: list[dict]
+
+
+@app.get("/admin/subtype-check", response_model=SubtypeCheckResponse)
+async def admin_subtype_check(
+    category: str = Query("", description="카테고리 하나만. 비우면 본문 규칙이 있는 곳 전부"),
+    limit: int = Query(0, ge=0, le=20000, description="훑을 공지 수. 0이면 전체"),
+    offset: int = Query(0, ge=0, description="앞에서부터 건너뛸 수"),
+) -> SubtypeCheckResponse:
+    """제목만으로 고른 유형과 본문까지 본 유형이 어긋나는 공지를 센다 (#38).
+
+    에어드랍처럼 제목으로 '완료/예정'이 안 갈리는 유형은 본문 표현으로 가르는데, 빗썸이 새
+    표현을 쓰면 규칙이 못 잡는다. 그때 general로 떨어져 참고 공지 후보에서 빠진다.
+
+    fell_to_general 을 둘로 갈라 센다. 본문이 비어 있어서면 규칙을 늘려도 안 고쳐지고
+    (수집을 --no-body로 했거나 본문이 이미지뿐), 본문은 있는데 안 맞으면 그 표현을 규칙에
+    넣으면 고쳐진다. 고치는 방법이 달라서 따로 세야 한다.
+
+    색인을 건드리지 않는다. 읽기만 한다.
+    """
+    from notice_ai.subtype_check import diagnose
+
+    # 공지 수만큼 도는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
+    return SubtypeCheckResponse(**await asyncio.to_thread(diagnose, category, limit, offset))
+
+
 @app.get("/types")
 def types() -> list[dict]:
     """카테고리별 subtype과 필수/선택 입력(질문 문구 포함). 프론트 문답 폼용."""

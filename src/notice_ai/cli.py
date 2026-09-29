@@ -136,10 +136,11 @@ def main() -> None:
             for c, fams in r["families"].items():
                 print(f"{c}: " + " / ".join(f"{k}={', '.join(v)}" for k, v in fams.items()))
             print(f"공지 {r['checked']}건 중 본문으로 갈리는 유형 {r['in_family']}건")
-            print(f"  제목과 본문이 같은 유형      {r['agree']}건")
-            print(f"  본문 보고 형제로 간 것       {r['sibling']}건 (규칙이 의도대로 동작)")
-            print(f"  general로 떨어진 것          {r['fell_to_general']}건"
+            print(f"  본문이 제목과 같은 유형을 가리킴   {r['agree']}건")
+            print(f"  본문이 형제 쪽을 가리킴            {r['sibling']}건 (규칙이 의도대로 동작)")
+            print(f"  본문이 아무 말도 안 함             {r['no_body_signal']}건"
                   f" → 본문 비어서 {r['empty_body']} / 새 표현 {r['novel_wording']}")
+            print("     (이때는 제목의 유형을 쓴다. 이 수가 크면 본문 규칙이 놀고 있다는 뜻)")
             if r["novel_examples"]:
                 print("\n  새 표현(규칙에 넣으면 고쳐짐):")
                 for e in r["novel_examples"]:

@@ -5,9 +5,13 @@
 그때 어떻게 되는지·몇 건인지 아무도 모르는 채로 두었다.
 
 여기서 재는 것은 셋이다.
-  맞음        제목으로 고른 유형과 본문까지 본 유형이 같다
-  형제로 감   제목은 A인데 본문이 B라 B로 갔다(규칙이 의도대로 동작)
-  general로   제목은 유형이 잡히는데 어느 형제 본문 규칙에도 안 맞아 general이 됐다  ← 문제
+  맞음        본문이 제목으로 고른 유형의 규칙에 맞다
+  형제로 감   본문이 형제 쪽 규칙에 맞아 그쪽으로 간다(규칙이 의도대로 동작)
+  아무 말 없음  본문이 어느 형제 규칙에도 안 맞는다 — 판단 근거가 제목뿐이다  ← 재려는 것
+
+`route`의 결과로 세지 않고 규칙을 직접 본다. route는 본문이 아무 말도 안 하면 제목의
+유형을 그대로 쓰므로(규칙은 뒤집을 때만 쓴다), 결과만 보면 '아무 말 없음'이 안 보인다.
+재려는 것은 라우팅 결과가 아니라 **본문 규칙이 얼마나 일을 하는가**다.
 
 마지막 것은 원인이 둘이라 갈라서 센다. 고치는 방법이 서로 다르기 때문이다.
   본문이 비어 있음  수집을 --no-body로 했거나 본문이 이미지뿐(#37). 규칙을 늘려도 안 고쳐진다
@@ -19,6 +23,8 @@
 from __future__ import annotations
 
 import logging
+
+import re
 
 from notice_ai import factcheck, index_ref
 from notice_ai.notice_types import TARGET_CATEGORIES, get_type, route, types_for
@@ -69,7 +75,7 @@ def diagnose(category: str = "", limit: int = 0, offset: int = 0) -> dict:
     돌려주는 모양은 항상 같다 — 실패해도 error 만 차고 나머지는 빈 값이다.
     """
     out: dict = {"error": "", "index": "", "categories": [], "families": {},
-                 "checked": 0, "in_family": 0, "agree": 0, "sibling": 0, "fell_to_general": 0,
+                 "checked": 0, "in_family": 0, "agree": 0, "sibling": 0, "no_body_signal": 0,
                  "empty_body": 0, "novel_wording": 0,
                  "empty_examples": [], "novel_examples": [], "sibling_examples": []}
 
@@ -107,25 +113,29 @@ def diagnose(category: str = "", limit: int = 0, offset: int = 0) -> dict:
                 if not (t and t.family):
                     continue        # 본문으로 갈릴 일이 없는 유형. 세면 늘 '맞음'이라 숫자만 부푼다
                 out["in_family"] += 1
-                final = route(c, title, body)[0].subtype        # 본문까지 보면
-                if final == by_title:
+                if t.body_pattern and re.search(t.body_pattern, body):
                     out["agree"] += 1
-                elif final != "general":
+                    continue
+                kin = next((x for x in types_for(c) if x is not t and x.family == t.family
+                            and x.body_pattern and re.search(x.body_pattern, body)), None)
+                if kin:
                     out["sibling"] += 1
                     if len(sib) < 10:
-                        sib.append({"title": title, "by_title": by_title, "final": final,
+                        sib.append({"title": title, "by_title": by_title, "final": kin.subtype,
                                     "body": body[:SNIPPET]})
+                    continue
+                # 본문이 아무 말도 안 한다. route는 제목의 유형을 쓰므로 공지가 사라지진 않지만,
+                # 이 수가 크면 본문 규칙이 일을 안 하고 제목에만 기대고 있다는 뜻이다.
+                out["no_body_signal"] += 1
+                if not body.strip():
+                    out["empty_body"] += 1
+                    if len(empty) < 10:
+                        empty.append({"title": title, "by_title": by_title, "body": ""})
                 else:
-                    out["fell_to_general"] += 1
-                    if not body.strip():
-                        out["empty_body"] += 1
-                        if len(empty) < 10:
-                            empty.append({"title": title, "by_title": by_title, "body": ""})
-                    else:
-                        out["novel_wording"] += 1
-                        if len(novel) < 20:
-                            novel.append({"title": title, "by_title": by_title,
-                                          "body": body[:SNIPPET]})
+                    out["novel_wording"] += 1
+                    if len(novel) < 20:
+                        novel.append({"title": title, "by_title": by_title,
+                                      "body": body[:SNIPPET]})
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {' '.join(str(e).split())[:200]}"
         return out

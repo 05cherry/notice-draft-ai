@@ -318,8 +318,15 @@ def get_type(category: str, subtype: str) -> NoticeType | None:
 def route(category: str, text: str, body: str | None = None) -> tuple[NoticeType, str]:
     """요청문/제목으로 subtype 판별. (유형, 매칭된 표현). 안 맞으면 general.
 
-    body(과거 공지 본문)를 주면, 본문 규칙이 있는 유형은 본문도 맞아야 한다. 제목은 맞는데 본문이
-    다르면 같은 family 중 본문이 맞는 형제 유형으로 보낸다(예: '…에어드랍 4회차 지급 안내' + 본문 '예정').
+    body(과거 공지 본문)를 주면, 같은 family 중 본문이 그 형제를 가리키면 그쪽으로 보낸다
+    (예: '…에어드랍 4회차 지급 안내' + 본문 '예정' → airdrop_plan).
+
+    본문이 어느 형제도 가리키지 않으면 제목이 고른 유형을 그대로 쓴다. 본문 규칙은 제목을
+    **뒤집을 때만** 쓰고, 거부권으로는 쓰지 않는다. 전에는 여기서 general로 떨어뜨렸는데,
+    그러면 빗썸이 규칙에 없는 표현을 쓴 공지가 참고 후보에서 통째로 빠졌다. 실측으로
+    안내 카테고리 279건 중 4건이 그랬고, 넷 다 제목이 맞았다('지급 시점 추후 별도 공지' —
+    뜻은 예정인데 '예정'이라는 낱말이 없다). 규칙에 낱말을 더 넣는 것은 끝이 없지만,
+    이 기준은 새 표현이 나와도 제목만큼은 살려 둔다.
     """
     types = types_for(category)
     for t in types:
@@ -331,7 +338,6 @@ def route(category: str, text: str, body: str | None = None) -> tuple[NoticeType
                         and s.body_pattern and re.search(s.body_pattern, body)), None)
             if sib:
                 return sib, m.group(0)
-            continue
         return t, m.group(0)
     return _general(category), ""
 

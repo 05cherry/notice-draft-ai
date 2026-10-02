@@ -56,6 +56,21 @@ _NON_COIN = {"KST", "UTC", "KRW", "DAXA", "OFAC", "VASP", "CODE", "API", "APP", 
              "IPO", "FAQ", "OTP", "PC", "KCSI", "DMCC", "FIU", "ISMS", "ISO", "ID", "2FA", "NFT",
              "SMS", "ARS", "URL", "PDF"}
 
+# 입출금 '범위'를 나타내는 말. '입출금'은 입금과 출금 둘 다를 뜻한다.
+# 긴 말부터 찾아야 '입출금'이 '입금'으로 잘려 잡히지 않는다(dict 순서 = 정규식 순서).
+_SCOPE_WORDS = {"입출금": frozenset({"입금", "출금"}),
+                "입금": frozenset({"입금"}),
+                "출금": frozenset({"출금"})}
+_SCOPE_RE = re.compile("|".join(_SCOPE_WORDS))
+
+
+def _scope(text) -> frozenset[str]:
+    """글에 적힌 입출금 범위. '입금 중지'면 {입금}, '입출금 중지'면 {입금, 출금}."""
+    out: set[str] = set()
+    for w in _SCOPE_RE.findall(str(text or "")):
+        out |= _SCOPE_WORDS[w]
+    return frozenset(out)
+
 
 # ── 추출기 ──────────────────────────────────────────────────────────────
 def _has_letter(s: str) -> bool:
@@ -483,13 +498,25 @@ def check_draft(
             if not re.search(rx, doc):
                 add("section", "warn", f"'{p.ntype.label}' 필수 항목이 보이지 않습니다: {name}")
 
-    # 10) 유형별 금지 서술(해당 입력이 없을 때)
+    # 10) 유형별 금지 서술 — 입력이 없는데 썼거나, 입력보다 넓게 썼거나
     for p in parts:
         for name, rx in p.ntype.guards:
-            v = p.inputs.get(name)
-            m = re.search(rx, body) if (is_empty(v) or is_unknown(v)) else None
-            if m:
-                add("guard", "error", f"입력하지 않은 '{field_label(p.ntype, name)}' 관련 사실이 있습니다: '{m.group(0)}'")
+            v, label = p.inputs.get(name), field_label(p.ntype, name)
+            blank = is_empty(v) or is_unknown(v)
+            for m in re.finditer(rx, body):
+                if blank:
+                    add("guard", "error", f"입력하지 않은 '{label}' 관련 사실이 있습니다: '{m.group(0)}'")
+                    continue
+                # 입력한 항목이라도 입력에 없는 범위까지 넓혀 쓰면 안 된다.
+                # 실제로 그랬다: 입력은 '입금 중지 시점은 …'인데 초안이 '입출금이 중지된 상태'로 썼고,
+                # 항목이 채워져 있다는 이유로 그대로 통과했다.
+                # 입력에 입금/출금이 한 마디도 없으면 견줄 것이 없으므로 넘어간다 — 그런 값까지
+                # 넓히기로 보면(예: '2026-09-25 16:00부터 제한') 멀쩡한 초안에 오류가 붙는다.
+                if given := _scope(v):
+                    if wider := _scope(m.group(0)) - given:
+                        add("guard_scope", "error",
+                            f"'{label}'에 없는 {'·'.join(sorted(wider))}까지 넓혀 썼습니다: "
+                            f"'{m.group(0)}' (입력: {v})")
 
     # 11) 역할 자리의 가상자산(예: 에어드랍 '(티커) 보유자'는 보유 기준 가상자산이어야 함)
     #     수정 LLM이 바로 고칠 수 있게 틀린 문장 전체와 정답을 함께 적는다

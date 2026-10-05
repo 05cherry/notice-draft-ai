@@ -27,6 +27,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from notice_ai.config import ConfigError
+
 COOKIE_NAME = "notice_api_token"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 30      # 30일
 _TRUTHY = frozenset({"1", "true", "yes", "on", "t", "y"})
@@ -71,6 +73,19 @@ def _https(request: Request) -> bool:
     return proto.split(",")[0].strip().lower() == "https"
 
 
+def _same(given: str | None, token: str) -> bool:
+    """내민 토큰이 맞는가. 타이밍 차이로 토큰을 알아내지 못하게 상수 시간으로 비교한다.
+
+    바이트로 바꿔서 비교하는 이유: `secrets.compare_digest` 는 비ASCII 문자열을 받으면
+    TypeError 를 낸다. 그대로 두면 `?token=한글` 처럼 아무나 보낼 수 있는 요청 하나로
+    500 이 났고(토큰이 뚫리는 건 아니지만 누구나 서버 오류를 만들 수 있었다),
+    API_TOKEN 에 한글이 섞이면 모든 요청이 500 이 됐다.
+    """
+    if not given:
+        return False
+    return secrets.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+
+
 def _presented(request: Request) -> str | None:
     """요청이 내민 토큰(헤더 > Bearer > 쿠키)."""
     if header := request.headers.get("x-api-token"):
@@ -88,6 +103,11 @@ def install(app: FastAPI) -> None:
     401 응답에도 CORS 헤더가 붙는다. 안 그러면 브라우저는 안내 문구 대신 '연결 실패'만 본다.
     """
     token = os.environ.get("API_TOKEN") or None
+    if token and not token.isascii():
+        # 쿠키·헤더는 HTTP 규격상 ASCII 다. 한글 토큰은 쿠키를 심는 순간 터지므로
+        # 요청마다 500 을 내는 대신 뜰 때 바로 알려 준다.
+        raise ConfigError("API_TOKEN 에 ASCII 가 아닌 문자가 있습니다. "
+                          "영문·숫자·기호로만 만들어 주세요(예: openssl rand -hex 24).")
 
     if token:
         @app.middleware("http")
@@ -95,7 +115,7 @@ def install(app: FastAPI) -> None:
             if _open(request):
                 return await call_next(request)
 
-            if (q := request.query_params.get("token")) and secrets.compare_digest(q, token):
+            if _same(request.query_params.get("token"), token):
                 # 브라우저로 연 경우(GET): ?token=... 을 쿠키로 옮기고 주소에서 지운다
                 # (주소창·접속 기록·리퍼러에 토큰이 남지 않게).
                 #
@@ -114,8 +134,7 @@ def install(app: FastAPI) -> None:
                     return res
                 return await call_next(request)
 
-            given = _presented(request)
-            if given and secrets.compare_digest(given, token):
+            if _same(_presented(request), token):
                 return await call_next(request)
             return JSONResponse(status_code=401, content=_UNAUTHORIZED)
 

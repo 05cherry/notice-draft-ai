@@ -3,8 +3,8 @@
 환경변수를 매번 손으로 넣지 않도록 **한 번에 불러오는 스크립트**와, 그걸로
 `collect`(공지 수집)를 **안전하게 테스트**하는 순서를 적는다.
 
-> 요약: ① `env.local.ps1` 한 번 채워서 터미널마다 불러온다 → ② 색인 대상(기본 `notices_live`)을
-> 한 줄로 확인 → ③ 소량(`--max-pages 1`)부터, `--incremental`·`--gap`으로 안전하게.
+> 요약: ① `env.local.ps1` 한 번 채운다 → ② 수집 전용 터미널에서 `.\collect.ps1 ...` 한 줄(env 로드+수집)
+> → ③ 소량(`--max-pages 1`)부터, `--incremental`·`--gap`으로 안전하게.
 
 ---
 
@@ -46,6 +46,23 @@ echo $env:OPENSEARCH_ENDPOINT   # PowerShell
 ```bash
 echo "$OPENSEARCH_ENDPOINT"     # bash
 ```
+
+### 수집 전용 터미널: `collect.ps1` (권장)
+
+**환경변수는 프로세스(터미널)마다 따로다.** A 터미널에서 `$env:`로 넣어도 B 터미널엔 안
+보인다. 그래서 "env 넣는 터미널 / 수집 돌리는 터미널"을 나누면 수집 쪽은 변수가 비어
+`ConfigError`가 난다 — **로드와 실행은 같은 셸 안에서 이어져야 한다.**
+
+래퍼 `collect.ps1`은 그 둘(env 로드 → `collect`)을 한 프로세스에서 묶어 준다. 수집 전용
+터미널을 새로 열고 **이 한 줄만** 치면 된다(뒤 인자는 그대로 `collect`로 넘어감):
+
+```powershell
+.\collect.ps1 --incremental --no-embed
+.\collect.ps1 --category 입출금 --max-pages 1 --no-body --no-embed
+```
+
+환경변수 정의는 여전히 `env.local.ps1` 한 곳에만 있고, 래퍼는 그걸 불러 쓸 뿐이다.
+(Git Bash면 래퍼 없이 `source env.sh && py -m notice_ai.cli collect --incremental --no-embed`)
 
 **어떤 변수가 왜 필요한가**
 
@@ -89,18 +106,21 @@ py -c "from notice_ai import index_ref; print('target=', index_ref.target(), '/ 
 빗썸은 **429(요청 과다)에 아주 민감**하다. 재시도로 밀어붙이면 차단이 더 길어진다
 (→ `docs/GOTCHAS.md` 수집/스크래핑). 반드시 **작게 시작**한다.
 
-```bash
+아래는 `collect.ps1` 래퍼 기준(env를 자동으로 불러옴). 래퍼 없이 쓰려면 env를 먼저 불러온 뒤
+`.\collect.ps1` 자리에 `py -m notice_ai.cli collect`를 넣으면 똑같다.
+
+```powershell
 # (0) 연결·차단 여부부터: 한 카테고리 1페이지(30건), 본문·임베딩 생략
-py -m notice_ai.cli collect --category 입출금 --max-pages 1 --no-body --no-embed
+.\collect.ps1 --category 입출금 --max-pages 1 --no-body --no-embed
 
 # (1) 본문까지 소량
-py -m notice_ai.cli collect --category 입출금 --max-pages 2 --no-embed
+.\collect.ps1 --category 입출금 --max-pages 2 --no-embed
 
 # (2) "새로 올라온 것만" 빠르게 받기 — 기존만 나오는 페이지에서 그 카테고리를 멈춘다
-py -m notice_ai.cli collect --incremental --no-embed
+.\collect.ps1 --incremental --no-embed
 
 # (3) 429가 잦으면 요청 간격을 늘린다(기본 2초 → 5초)
-py -m notice_ai.cli collect --incremental --gap 5 --no-embed
+.\collect.ps1 --incremental --gap 5 --no-embed
 ```
 
 ### 자주 쓰는 옵션

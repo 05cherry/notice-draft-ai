@@ -366,6 +366,9 @@ def get_notice_detail(url: str) -> dict | None:
         return None
     title, body = doc.get("title", ""), doc.get("raw_text") or ""
     orig_title, orig_body, removed = factcheck.original_version(title, body)
+    # 블록 경계 표시는 내부 장치다. 프론트가 그리는 '원문 미리보기' 로 내보내지 않는다.
+    # 떼면 빈 줄 하나가 남아서, 업데이트 블록이 어디서 끝나는지는 그대로 보인다.
+    body = factcheck.strip_block_sep(body)
     cats = doc.get("categories") or []
     return {"source_url": doc.get("source_url", url), "title": title, "categories": cats,
             "published_at": doc.get("published_at"), "tickers": list(doc.get("tickers") or []), "body": body,

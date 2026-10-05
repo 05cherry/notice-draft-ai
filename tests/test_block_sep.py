@@ -249,3 +249,21 @@ def test_새_공지는_refresh_body여도_평소처럼_색인된다(수집):
     _, os_fake, _ = 수집({1: HTML}, existing=set(), refresh_body=True)
     assert len(os_fake.indexed) == 1 and os_fake.updated == []
     assert BLOCK_SEP in os_fake.indexed[0][1]["raw_text"]
+
+
+def test_공지_조회가_구분선을_내보내지_않는다(monkeypatch):
+    """프론트가 그리는 '원문 미리보기' 다. 내부 장치가 API 로 새면 안 된다."""
+    from notice_ai import drafting
+
+    raw = html_to_text(esc(f"<p>재개되었습니다.</p><hr><p>{ORIGINAL}</p>"))
+    assert BLOCK_SEP in raw
+    monkeypatch.setattr(drafting, "_fetch_notice", lambda url: {
+        "source_url": url, "title": "제목", "raw_text": raw, "categories": ["입출금"],
+        "published_at": "2026-09-20 10:00:00", "tickers": ["MEGA"],
+    })
+    d = drafting.get_notice_detail("https://feed.bithumb.com/notice/1")
+
+    assert BLOCK_SEP not in d["body"], "원문 미리보기에 구분선이 남았다"
+    assert BLOCK_SEP not in d["original_body"]
+    assert "재개되었습니다" in d["body"]           # 원문은 통째로 보여 준다
+    assert "재개되었습니다" not in d["original_body"]   # 초안이 참고하는 쪽에서는 빠진다

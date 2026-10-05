@@ -57,7 +57,6 @@ src/notice_ai/
   aliases.py           코인 별칭·티커 추출(수집·CSV 색인 때)
   coins.py             빗썸 거래 대상 목록 — 10분마다 갱신하는 메모리 캐시(이름·티커 자동 채움)
   fusion.py hyde.py rerank.py   RRF 융합·가상 공지·리랭커 — CLI `search --hybrid`에서만 씀
-  assembly.py          옛 문답 → 검색어 조립. 지금 흐름에서는 쓰지 않음(#12)
   prompts/             common.txt + category/<카테고리>.txt + subtype/<카테고리>/<유형>.txt
   web/search.html      간단한 검색 화면(/ui)
 data/                  categories.json(카테고리 ID) · coin_aliases.json(코인 별칭)

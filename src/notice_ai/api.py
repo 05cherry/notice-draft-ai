@@ -1,6 +1,6 @@
 """FastAPI 백엔드 — 프론트와 HTTP(JSON)로 통신하는 서버.
 
-CLI(cli.py)를 대체하는 게 아니라, 같은 알맹이(search/assembly/...)를
+CLI(cli.py)를 대체하는 게 아니라, 같은 알맹이(search/drafting/...)를
 HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재사용한다.
 
 실행:

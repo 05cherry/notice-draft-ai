@@ -313,3 +313,11 @@ def test_목록을_못_읽으면_왜인지_말한다():
     client.cat.indices = lambda **kw: (_ for _ in ()).throw(Boom("접속 불가"))
     with pytest.raises(RuntimeError, match="읽지 못했습니다"):
         index_ref.inventory(client=client)
+
+
+def test_별칭이_여럿을_가리키면_아무것도_지워도_된다고_하지_않는다():
+    """비정상 상태다. 어느 쪽이 원본인지 모르는 채로 지울 후보를 내놓으면 안 된다."""
+    client = FakeClient({OLDER: {ALIAS}, NEW: {ALIAS}}, created={OLDER: 1, NEW: 2})
+    keep = 훑기(client)
+    assert all(keep.values()), f"지워도 된다고 말한 것이 있다: {keep}"
+    assert "여럿" in keep[OLDER] and "여럿" in keep[NEW]

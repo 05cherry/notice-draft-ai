@@ -167,10 +167,8 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
     def aliases_of(name: str) -> list[str]:
         return sorted((aliased.get(name, {}).get("aliases") or {}))
 
-    live = ""
-    if alias:
-        pointed = [i for i in aliased if alias in (aliased[i].get("aliases") or {})]
-        live = pointed[0] if len(pointed) == 1 else ""
+    pointed = [i for i in aliased if alias and alias in (aliased[i].get("aliases") or {})]
+    live = pointed[0] if len(pointed) == 1 else ""
 
     out = []
     for r in rows:
@@ -200,6 +198,12 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
     for i, d in enumerate(out):
         if d["name"] == live:
             d["keep"] = f"별칭 '{alias}'가 가리키는 중 — 지우면 검색이 멈춥니다"
+        elif d["name"] in pointed:
+            # 별칭이 여럿을 가리킨다. 우리 쪽에서 이렇게 만들지 않으니 손으로 붙였거나
+            # 전환이 중간에 끊긴 것이다. 어느 쪽이 원본인지 모르는 채로 '지워도 된다'고
+            # 말할 수는 없으므로 전부 붙잡고 사람을 부른다.
+            d["keep"] = (f"별칭 '{alias}'가 인덱스 여럿({', '.join(sorted(pointed))})을 "
+                         f"가리킵니다 — 어느 쪽이 원본인지 먼저 정하세요")
         elif d["name"] == config.INDEX_NAME:
             d["keep"] = "NOTICE_INDEX — 별칭이 없을 때 돌아갈 이름"
         elif d["aliases"]:

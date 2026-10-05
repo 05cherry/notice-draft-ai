@@ -149,6 +149,7 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
 
     만든 시각으로 줄 세운다. 이름으로 세우면 안 된다 — 'notices_v3' 와
     'notices_20260928221926' 을 글자로 비교하면 'v' 가 숫자보다 커서 세대가 뒤집힌다.
+    만든 시각을 못 읽은 인덱스는 세대를 셀 수 없으므로 후보로 내놓지 않는다.
     """
     c = client or _client()
     alias = config.INDEX_ALIAS
@@ -208,6 +209,10 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
             d["keep"] = "NOTICE_INDEX — 별칭이 없을 때 돌아갈 이름"
         elif d["aliases"]:
             d["keep"] = f"다른 별칭이 붙어 있음({', '.join(d['aliases'])})"
+        elif not d["_at"]:
+            # 만든 시각을 못 읽으면 세대를 셀 수 없다. 그 상태로 '지워도 된다'고 말하면
+            # 되돌릴 곳을 지우게 할 수 있다. 모르면 모른다고 한다.
+            d["keep"] = "만든 시각을 읽지 못했습니다 — 지우기 전에 손으로 확인하세요"
         elif i >= after and rollback < KEEP_ROLLBACK:
             d["keep"] = "되돌릴 곳으로 남겨 둠(바로 앞 세대)"
             rollback += 1

@@ -321,3 +321,11 @@ def test_별칭이_여럿을_가리키면_아무것도_지워도_된다고_하�
     keep = 훑기(client)
     assert all(keep.values()), f"지워도 된다고 말한 것이 있다: {keep}"
     assert "여럿" in keep[OLDER] and "여럿" in keep[NEW]
+
+
+def test_만든_시각을_못_읽은_인덱스는_후보로_내놓지_않는다():
+    """세대를 셀 수 없는 채로 '지워도 된다'고 하면 되돌릴 곳을 지우게 할 수 있다."""
+    client = FakeClient({OLDER: set(), NEW: {ALIAS}, "notices_??": set()},
+                        created={OLDER: 1, NEW: 2, "notices_??": 0})
+    keep = 훑기(client)
+    assert "손으로 확인" in keep["notices_??"]

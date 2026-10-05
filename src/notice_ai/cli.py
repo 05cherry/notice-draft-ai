@@ -166,16 +166,21 @@ def main() -> None:
                   f" (비교 풀 하한 {r['pool_floor']}자)")
             print(f"  짧은 줄 {r['short_lines']}개"
                   f" → 고정 문구 {r['boilerplate']} / 사례 고유 {r['case_specific']}")
+            print(f"     사례 고유 {r['case_specific']}개 중"
+                  f" 자리표시자뿐 {r['mask_only']}(전용 검사가 이미 봄)"
+                  f" / 실제 글자 남음 {r['uncovered']} ← 아무도 안 보는 것")
             print(f"  (기준선) 30자 이상이라 지금도 잡히는 고유 줄 {r['long_specific']}개")
             if r["by_group"]:
                 print("\n  유형별(사례 고유 많은 순):")
                 for g in r["by_group"][:10]:
                     print(f"    {g['category']}/{g['subtype']:<20} 공지 {g['notices']:>3}건"
-                          f"  고유 {g['case_specific']:>4} / 고정 {g['boilerplate']:>4}")
+                          f"  아무도 안 봄 {g['uncovered']:>4}"
+                          f" / 자리표시자뿐 {g['mask_only']:>4} / 고정 {g['boilerplate']:>4}")
             if r["examples"]:
-                print("\n  지금 놓치는 짧은 줄(문턱을 낮추면 잡힐 것):")
+                print("\n  아무도 안 보는 짧은 줄(문턱을 낮추면 잡힐 것):")
                 for e in r["examples"][:20]:
                     print(f"    [{e['chars']:>2}자] {e['category']}/{e['subtype']:<18} {e['line'][:44]}")
+                    print(f"           남는 글자: {e['uncovered'][:40]}")
     elif a.command == "alias":
         from notice_ai import config, index_ref
 

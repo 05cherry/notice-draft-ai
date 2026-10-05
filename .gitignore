@@ -5,7 +5,7 @@
 venv
 __pycache__/
 .pytest_cache/
-# 로컬 환경변수(비밀값) — .example 템플릿만 커밋한다
+# 로컬 환경변수(비밀값) — scripts/*.example 템플릿만 커밋한다
+scripts/env.sh
 env.local.ps1
-env.sh
 collect_*.log

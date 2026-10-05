@@ -1,0 +1,3 @@
+# 셸 스크립트는 LF 고정. Windows(core.autocrlf=true)에서 CRLF로 바뀌면
+# Git Bash 실행 시 "bad interpreter: ...^M" 로 셰뱅이 깨진다.
+*.sh text eol=lf

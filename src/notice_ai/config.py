@@ -40,6 +40,11 @@ def auto_rebuild() -> bool:
     return _flag("DICT_AUTO_REBUILD", True)
 
 
+def prune_indices() -> bool:
+    """재색인 성공 뒤 쌓인 옛 인덱스를 지울지(#53). 매번 읽어 재시작 없이 끌 수 있다."""
+    return _flag("DICT_PRUNE", True)
+
+
 def rebuild_min_sec() -> float:
     try:
         return max(0.0, float(os.environ.get("DICT_REBUILD_MIN_SEC", "21600")))

@@ -9,6 +9,7 @@
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
   indices [--pattern 패턴]    남아 있는 인덱스와 각각을 왜 두는지(읽기만 한다)
+  prune-indices [--yes]      재색인이 쌓아 둔 옛 인덱스를 치운다(--yes 없으면 보여만 준다)
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
@@ -66,6 +67,9 @@ def main() -> None:
 
     pv = sub.add_parser("indices", help="남아 있는 인덱스 훑기(#12 정리용). 아무것도 바꾸지 않는다")
     pv.add_argument("--pattern", default="*", help="인덱스 이름 패턴(기본 전부)")
+
+    pn = sub.add_parser("prune-indices", help="쌓인 옛 인덱스 치우기(#53). 되돌릴 수 없다")
+    pn.add_argument("--yes", action="store_true", help="실제로 지운다(없으면 보여만 준다)")
 
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
@@ -212,6 +216,26 @@ def main() -> None:
         print(f"\n인덱스 {len(rows)}개 · 지워도 되는 후보 {drop}개(· 표시)")
         if drop:
             print("지우는 명령은 없습니다. OpenSearch 대시보드에서 직접 지웁니다(docs/INDEX_OPS.md).")
+    elif a.command == "prune-indices":
+        from notice_ai import dictionary
+
+        r = dictionary.prune(dry_run=not a.yes)
+        for sk in r["skipped"]:
+            print(f"  건너뜀  {sk['name']}  — {sk['reason']}")
+        if not r["ok"]:
+            print(f"안 됨({r['reason']}) — {r['message']}")
+        elif r["dry_run"]:
+            for n in r["candidates"]:
+                print(f"  지울 것  {n}")
+            print(f"\n{r['message']}")
+            if r["candidates"]:
+                print("실제로 지우려면 --yes 를 붙입니다. 되돌릴 수 없습니다.")
+        else:
+            for n in r["dropped"]:
+                print(f"  지웠음  {n}")
+            for n, why in r["failed"].items():
+                print(f"  실패    {n}  — {why}")
+            print(f"\n{r['message']}")
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
 

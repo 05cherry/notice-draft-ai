@@ -1,7 +1,7 @@
 /.idea/
 .env
 /CLAUDE.md
-/tests/
+/tests/results/
 venv
 __pycache__/
 .pytest_cache/

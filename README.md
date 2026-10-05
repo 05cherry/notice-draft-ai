@@ -57,7 +57,6 @@ src/notice_ai/
   aliases.py           코인 별칭·티커 추출(수집·CSV 색인 때)
   coins.py             빗썸 거래 대상 목록 — 10분마다 갱신하는 메모리 캐시(이름·티커 자동 채움)
   fusion.py hyde.py rerank.py   RRF 융합·가상 공지·리랭커 — CLI `search --hybrid`에서만 씀
-  assembly.py          옛 문답 → 검색어 조립. 지금 흐름에서는 쓰지 않음(#12)
   prompts/             common.txt + category/<카테고리>.txt + subtype/<카테고리>/<유형>.txt
   web/search.html      간단한 검색 화면(/ui)
 data/                  categories.json(카테고리 ID) · coin_aliases.json(코인 별칭)
@@ -143,7 +142,13 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `POST /spellcheck` | 맞춤법·띄어쓰기·어색한 표현 제안. **본문을 고쳐 주지 않음** | 1회 |
 | `GET /notice?url=` | 공지 1건(원문 + 초안이 참고하는 최초 버전 + 판별 유형) | 없음 |
 | `GET /health` | 생존 확인. `?deep=true`면 의존 서비스 상태 | 없음 |
-| `GET /admin/user-dictionary` | 코인명이 검색되는지·사용자 사전이 고치는지 확인(`limit`·`offset`). 색인 안 건드림 | 없음 |
+| `GET /admin/user-dictionary` | 코인명이 검색되는지·사용자 사전이 고치는지 확인(`limit`·`offset`) | 없음 |
+| `GET /admin/dictionary/status` | 사전 자동 갱신 상태(뒤처진 코인·마지막 갱신 결과) | 없음 |
+| `POST /admin/dictionary/rebuild` | **사전 갱신 → 새 인덱스 → 별칭 전환**(인덱스를 만듭니다) | 없음 |
+| `GET`·`POST /admin/dictionary/alias` | 별칭을 만들거나 다른 인덱스로 돌립니다 | 없음 |
+| `GET /admin/indices` | 남아 있는 인덱스와 각각을 왜 두는지(`pattern`) | 없음 |
+| `GET /admin/subtype-check` | 형제 유형 판별이 실제로 어떻게 갈리는지(#38) | 없음 |
+| `GET /admin/copy-check` | 짧은 줄을 복사 판정에 넣으면 어떻게 되는지(#36) | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`
 - 문답은 무상태입니다. 프론트가 매번 전체 값을 보내고, 서버는 `missing_fields`로 다음 질문을 알려 줍니다.
@@ -198,9 +203,15 @@ curl -H "X-API-Token: <토큰>" "https://<백엔드>.onrender.com/coins?q=이더
 - [docs/INDEX_OPS.md](docs/INDEX_OPS.md) — 인덱스 운영. 별칭·사전 갱신·되돌리기를 `/admin`으로 하는 법.
 
 ## 테스트
-`tests/`(오프라인 단위 테스트, 검색·초안 평가 스크립트)는 아직 저장소에 포함하지 않았습니다(`.gitignore`).
-공유 방법은 [#12](https://github.com/05cherry/notice-draft-ai/issues/12)에서 정합니다. 로컬에서는
-`py -m pytest tests -q`로 돌리며, 오프라인 테스트는 OpenSearch·GPT 없이 가짜로 동작합니다.
+
+```bash
+pytest                 # 저장소 어디서든. PYTHONPATH 안 줘도 됩니다(pytest.ini)
+```
+
+전부 **오프라인**입니다. OpenSearch·OpenAI·빗썸에 접속하지 않으므로 자격증명 없이 다른 PC에서도
+그대로 돕니다. 돈이 드는 수동 검사는 `tests/try_*.py`로 따로 두고 `pytest`가 줍지 않게 했습니다.
+
+자세한 것은 [tests/README.md](tests/README.md).
 
 ## 배포 (Render 무료 플랜)
 
@@ -216,10 +227,14 @@ curl -H "X-API-Token: <토큰>" "https://<백엔드>.onrender.com/coins?q=이더
 | `OPENAI_API_KEY` | 초안 생성을 쓸 때 |
 | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | Bedrock 임베딩을 쓸 때만. 비워 두면 BM25만 동작 |
 | `ALLOWED_ORIGINS` | 프론트 주소. 예) `https://notice-draft-front.onrender.com` |
-| `API_TOKEN` | Render가 무작위로 만들어 줍니다. 대시보드에서 확인해 프론트 연결 설정에 넣습니다 |
+| `API_TOKEN` | Render가 무작위로 만들어 줍니다. 대시보드에서 확인해 프론트 연결 설정에 넣습니다. 손으로 정할 때는 ASCII로만(쿠키·헤더가 HTTP 규격상 ASCII입니다) |
 
-`/admin/*`은 운영자가 상태를 들여다보는 자리입니다. 읽기만 하고 색인·데이터를 바꾸지 않습니다.
-지금은 토큰이 하나뿐이라 **다른 경로와 권한이 같습니다** — 관리자 권한이 따로 있는 것처럼 보이지만 아닙니다.
+`/admin/*`은 운영자가 상태를 들여다보고 인덱스를 운영하는 자리입니다. 대부분 읽기만 하지만
+`dictionary/rebuild`는 인덱스를 새로 만들어 문서를 옮기고, `dictionary/alias`는 검색이 보는 곳을
+바꿉니다(그래서 rebuild는 POST만 받습니다). 자세한 것은 [docs/INDEX_OPS.md](docs/INDEX_OPS.md).
+
+지금은 토큰이 하나뿐이라 **다른 경로와 권한이 같습니다** — 관리자 권한이 따로 있는 것처럼 보이지만
+아닙니다. 사용자별 권한은 [#6](https://github.com/05cherry/notice-draft-ai/issues/6)에서 다룹니다.
 
 **접근 통제** — `API_TOKEN`이 있으면 모든 요청에 토큰을 요구합니다(`auth.py`). 토큰 없이 통과하는 것은
 `/health`와 CORS 사전 요청뿐입니다. 토큰은 세 가지 방법으로 냅니다.

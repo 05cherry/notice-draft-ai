@@ -1,6 +1,6 @@
 """FastAPI 백엔드 — 프론트와 HTTP(JSON)로 통신하는 서버.
 
-CLI(cli.py)를 대체하는 게 아니라, 같은 알맹이(search/assembly/...)를
+CLI(cli.py)를 대체하는 게 아니라, 같은 알맹이(search/drafting/...)를
 HTTP로 노출하는 얇은 층이다. 로직은 기존 모듈을 그대로 재사용한다.
 
 실행:
@@ -488,6 +488,52 @@ async def admin_dictionary_alias(
         return AliasResponse(**await asyncio.to_thread(index_ref.point_at, index or config.INDEX_NAME))
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+class IndexRow(BaseModel):
+    name: str
+    docs: int
+    size: str
+    created: str
+    health: str
+    aliases: list[str]
+    keep: str                    # 왜 두는지. 빈 문자열이면 지워도 되는 후보
+
+
+class InventoryResponse(BaseModel):
+    alias: str
+    env_index: str               # NOTICE_INDEX
+    total: int
+    droppable: int               # keep 이 빈 것의 수
+    indices: list[IndexRow]
+
+
+@app.get("/admin/indices", response_model=InventoryResponse)
+async def admin_indices(
+    pattern: str = Query("*", description="인덱스 이름 패턴. 기본은 전부"),
+) -> InventoryResponse:
+    """남아 있는 인덱스와 각각을 왜 두는지. **읽기만 한다.**
+
+    재색인할 때마다 인덱스가 하나씩 쌓이고 자동으로 지우지 않는다(되돌릴 곳이 있어야 하므로).
+    가끔 사람이 정리해야 하는데 그때 뭘 지워도 되는지 보려고 만들었다(#12).
+
+    `keep`이 빈 것만 지워도 되는 후보다. 지우는 길은 일부러 만들지 않았다 — 인덱스 삭제는
+    되돌릴 수 없는데 공유 토큰 하나로 열어 두기엔 위험하다(#6). OpenSearch 대시보드나
+    PC에서 직접 지운다.
+    """
+    from notice_ai import index_ref
+
+    try:
+        rows = await asyncio.to_thread(index_ref.inventory, pattern)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return InventoryResponse(
+        alias=config.INDEX_ALIAS,
+        env_index=config.INDEX_NAME,
+        total=len(rows),
+        droppable=sum(1 for r in rows if not r["keep"]),
+        indices=[IndexRow(**r) for r in rows],
+    )
 
 
 class SubtypeCheckResponse(BaseModel):

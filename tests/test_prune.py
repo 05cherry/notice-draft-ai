@@ -152,9 +152,11 @@ def test_하나가_실패해도_나머지는_계속한다():
 
 
 # ── 따로 부르는 길 ───────────────────────────────────────────────────────
-def test_dry_run이_기본_동작이고_아무것도_안_지운다():
+def test_dry_run이_기본값이고_아무것도_안_지운다():
+    """되돌릴 수 없는 일은 부르는 쪽이 분명히 적어야 한다."""
     client = 쌓인것()
-    r = dictionary.prune(client=client, dry_run=True)
+    r = dictionary.prune(client=client)          # dry_run 을 안 넘긴다
+
     assert r["ok"] and r["dry_run"]
     assert r["candidates"] == [OLD1, OLD2]
     assert r["dropped"] == []

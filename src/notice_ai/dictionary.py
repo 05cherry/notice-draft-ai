@@ -199,10 +199,12 @@ def _prune_quietly(client) -> list[str]:
         return []
 
 
-def prune(*, client=None, dry_run: bool = False) -> dict:
+def prune(*, client=None, dry_run: bool = True) -> dict:
     """쌓인 옛 인덱스를 치운다. 재색인과 겹치지 않게 같은 자물쇠를 쓴다.
 
-    `dry_run` 이면 무엇을 지울지만 알려 주고 아무것도 지우지 않는다.
+    `dry_run` 이면 무엇을 지울지만 알려 주고 아무것도 지우지 않는다. **기본이 그쪽이다** —
+    되돌릴 수 없는 일은 부르는 쪽이 분명히 적어야 한다. 부르는 곳(엔드포인트·CLI)은 둘 다
+    값을 직접 넘기므로 이 기본값은 나중에 다른 코드가 무심코 부를 때를 위한 것이다.
     """
     if not _lock.acquire(blocking=False):
         return {"ok": False, "reason": "already_running", "dry_run": dry_run,

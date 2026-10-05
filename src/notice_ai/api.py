@@ -531,6 +531,58 @@ async def admin_subtype_check(
     return SubtypeCheckResponse(**await asyncio.to_thread(diagnose, category, limit, offset))
 
 
+class CopyCheckResponse(BaseModel):
+    error: str
+    index: str
+    low: int                     # 새 문턱 후보(이 길이부터 봤다)
+    high: int                    # 지금 문턱 MIN_COPY_LINE
+    pool_floor: int              # 고정 문구 판정에 쓴 비교 풀의 하한(low 와 함께 내려간다)
+    groups: int                  # 비교할 형제가 있는 (카테고리, subtype) 수
+    notices: int                 # 훑은 공지 수
+    short_lines: int             # low ~ high 구간의 줄 수
+    boilerplate: int             #   그중 같은 유형 다른 공지에도 있음 → 문턱 낮춰도 안 잡힘
+    case_specific: int           #   그중 이 공지에만 있음(아래 둘의 합)
+    mask_only: int               #     조항·날짜·코인 자리표시자뿐 → 전용 검사가 이미 본다
+    uncovered: int               #     자리표시자 사이에 실제 글자가 남음 → 아무도 안 본다 ← 핵심
+    min_uncovered: int           # uncovered 로 세는 최소 글자 수
+    long_specific: int           # 30자 이상이라 지금도 잡히는 고유 줄(비교 기준선)
+    by_group: list[dict]
+    examples: list[dict]         # case_specific 예시 {category, subtype, title, line, chars}
+
+
+@app.get("/admin/copy-check", response_model=CopyCheckResponse)
+async def admin_copy_check(
+    low: int = Query(15, ge=2, le=29, description="이 길이부터 본다. 기본 15(비교 풀이 모으는 하한)"),
+    per_group: int = Query(40, ge=2, le=200, description="(카테고리, subtype)마다 볼 공지 수"),
+) -> CopyCheckResponse:
+    """짧은 줄을 복사 판정에 넣으면 어떻게 되는지 센다 (#36).
+
+    `MIN_COPY_LINE`(30)보다 짧은 줄은 지금 복사 검사에서 빠진다. 표 형태 공지처럼 값이 따로
+    한 줄에 오면 그대로 베껴도 통과한다.
+
+    문턱을 낮추는 게 답인지 재본다. 짧은 줄을 '같은 유형 다른 공지에도 있나'로 갈라,
+    boilerplate(항목명·인사말 — 낮춰도 안 잡힘)와 case_specific(이 공지 고유)으로 가른다.
+
+    case_specific 을 다시 둘로 나눈다. 비교에 쓰는 줄은 이미 사실값이 가려져 있고
+    (조항 번호·날짜·코인·링크 → 자리표시자) 그 값들은 전용 검사가 따로 보기 때문이다.
+      mask_only  자리표시자뿐 → 베껴도 새로 틀릴 것이 없다. 구멍이 아니다
+      uncovered  자리표시자 사이에 실제 글자가 남는다 → 복사 검사만이 볼 수 있다 ← 재려는 것
+    이렇게 안 가르면 '고유 줄 200개'가 나와도 대부분 이미 잡히는 것이라 판단을 못 한다.
+
+    uncovered 가 적으면 고칠 값이 없고, 많으면 examples 를 보고 정한다.
+
+    low 를 15보다 내리면 비교 풀의 하한도 함께 내려간다(pool_floor). specific_lines 의 풀은
+    15자부터 모으므로 문턱만 내리면 그 짧은 줄들이 풀에 없어 전부 '고유'로 보인다 —
+    항목명('개정 조항')까지 복사로 잡힌다. 문턱을 내리는 것은 풀 하한을 내리는 것과 한 짝이다.
+
+    difflib 비교가 많아 per_group 으로 표본을 제한한다. 색인은 건드리지 않는다.
+    """
+    from notice_ai.copy_check import diagnose
+
+    # 공지 × 줄 × 형제 × 줄 로 도는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
+    return CopyCheckResponse(**await asyncio.to_thread(diagnose, low, per_group))
+
+
 @app.get("/types")
 def types() -> list[dict]:
     """카테고리별 subtype과 필수/선택 입력(질문 문구 포함). 프론트 문답 폼용."""

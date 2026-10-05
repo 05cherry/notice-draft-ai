@@ -5,6 +5,7 @@
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
   check-dict                사용자 사전이 필요한지·넣으면 나아지는지 확인(색인 안 건드림)
   check-subtype              형제 유형(에어드랍 완료/예정) 판별이 얼마나 맞는지 확인
+  check-copy                 짧은 줄을 복사 판정에 넣으면 어떻게 되는지 확인
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
@@ -52,6 +53,10 @@ def main() -> None:
     pt.add_argument("--category", default="", help="카테고리 하나만(생략 시 전부)")
     pt.add_argument("--limit", type=int, default=0, help="훑을 공지 수(0=전체)")
     pt.add_argument("--offset", type=int, default=0)
+
+    pp = sub.add_parser("check-copy", help="짧은 줄 복사 판정 확인(#36). 색인을 건드리지 않는다")
+    pp.add_argument("--low", type=int, default=15, help="이 길이부터 본다(기본 15)")
+    pp.add_argument("--per-group", type=int, default=40, help="유형마다 볼 공지 수")
 
     pa = sub.add_parser("alias", help="별칭을 만들거나 돌린다(#34 자동 갱신의 전제)")
     pa.add_argument("--index", default="", help="가리킬 인덱스(생략 시 NOTICE_INDEX)")
@@ -150,6 +155,32 @@ def main() -> None:
                 print(f"\n  본문이 빈 것(규칙으로 못 고침) 예시 {len(r['empty_examples'])}건:")
                 for e in r["empty_examples"]:
                     print(f"    [{e['by_title']}] {e['title'][:60]}")
+    elif a.command == "check-copy":
+        from notice_ai.copy_check import diagnose
+
+        r = diagnose(a.low, a.per_group)
+        if r["error"]:
+            print(r["error"])
+        else:
+            print(f"공지 {r['notices']}건 · 유형 {r['groups']}개 · {r['low']}~{r['high']-1}자 구간"
+                  f" (비교 풀 하한 {r['pool_floor']}자)")
+            print(f"  짧은 줄 {r['short_lines']}개"
+                  f" → 고정 문구 {r['boilerplate']} / 사례 고유 {r['case_specific']}")
+            print(f"     사례 고유 {r['case_specific']}개 중"
+                  f" 자리표시자뿐 {r['mask_only']}(전용 검사가 이미 봄)"
+                  f" / 실제 글자 남음 {r['uncovered']} ← 아무도 안 보는 것")
+            print(f"  (기준선) 30자 이상이라 지금도 잡히는 고유 줄 {r['long_specific']}개")
+            if r["by_group"]:
+                print("\n  유형별(사례 고유 많은 순):")
+                for g in r["by_group"][:10]:
+                    print(f"    {g['category']}/{g['subtype']:<20} 공지 {g['notices']:>3}건"
+                          f"  아무도 안 봄 {g['uncovered']:>4}"
+                          f" / 자리표시자뿐 {g['mask_only']:>4} / 고정 {g['boilerplate']:>4}")
+            if r["examples"]:
+                print("\n  아무도 안 보는 짧은 줄(문턱을 낮추면 잡힐 것):")
+                for e in r["examples"][:20]:
+                    print(f"    [{e['chars']:>2}자] {e['category']}/{e['subtype']:<18} {e['line'][:44]}")
+                    print(f"           남는 글자: {e['uncovered'][:40]}")
     elif a.command == "alias":
         from notice_ai import config, index_ref
 

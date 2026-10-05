@@ -8,6 +8,7 @@
   check-copy                 짧은 줄을 복사 판정에 넣으면 어떻게 되는지 확인
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
+  indices [--pattern 패턴]    남아 있는 인덱스와 각각을 왜 두는지(읽기만 한다)
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
@@ -62,6 +63,9 @@ def main() -> None:
     pa.add_argument("--index", default="", help="가리킬 인덱스(생략 시 NOTICE_INDEX)")
 
     sub.add_parser("rebuild-dict", help="사전 갱신 → 새 인덱스 → 별칭 전환")
+
+    pv = sub.add_parser("indices", help="남아 있는 인덱스 훑기(#12 정리용). 아무것도 바꾸지 않는다")
+    pv.add_argument("--pattern", default="*", help="인덱스 이름 패턴(기본 전부)")
 
     pc = sub.add_parser("collect", help="공지 수집(스크래핑)")
     pc.add_argument("--category", default=None, help="카테고리명(생략 시 전체)")
@@ -194,6 +198,20 @@ def main() -> None:
         if r["dest"]:
             print(f"  {r['source'] or '(원본)'} → {r['dest']}  문서 {r['docs']}건 · 사전 {r['rules']}개"
                   f" · {r['took_sec']}초")
+    elif a.command == "indices":
+        from notice_ai import config, index_ref
+
+        rows = index_ref.inventory(a.pattern)
+        print(f"별칭 {config.INDEX_ALIAS or '(안 씀)'} · NOTICE_INDEX {config.INDEX_NAME}\n")
+        width = max((len(r["name"]) for r in rows), default=10)
+        for r in rows:
+            mark = "  " if r["keep"] else "· "      # 지워도 되는 후보에 점을 찍는다
+            print(f"{mark}{r['name']:<{width}}  {r['docs']:>7,}건  {r['size']:>8}  "
+                  f"{r['keep'] or '지워도 됩니다'}")
+        drop = sum(1 for r in rows if not r["keep"])
+        print(f"\n인덱스 {len(rows)}개 · 지워도 되는 후보 {drop}개(· 표시)")
+        if drop:
+            print("지우는 명령은 없습니다. OpenSearch 대시보드에서 직접 지웁니다(docs/INDEX_OPS.md).")
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
 

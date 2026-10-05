@@ -9,7 +9,7 @@
 ## 목차
 1. [먼저 알아야 할 것 — 별칭](#먼저-알아야-할-것--별칭)
 2. [처음 한 번: 별칭 만들기](#처음-한-번-별칭-만들기)
-3. [엔드포인트 넷](#엔드포인트-넷)
+3. [엔드포인트 다섯](#엔드포인트-다섯)
 4. [평소에 보는 법](#평소에-보는-법)
 5. [사전이 뒤처졌을 때](#사전이-뒤처졌을-때)
 6. [되돌리기](#되돌리기)
@@ -85,7 +85,7 @@ https://<서버주소>/admin/dictionary/alias?index=notices_v4&token=<토큰>
 
 ---
 
-## 엔드포인트 넷
+## 엔드포인트 다섯
 
 모두 `?token=<토큰>`이 필요합니다.
 
@@ -95,6 +95,7 @@ https://<서버주소>/admin/dictionary/alias?index=notices_v4&token=<토큰>
 | `/admin/user-dictionary` | GET | 코인명이 쪼개지는지 진단 | `_analyze` 몇 번. 수 초 |
 | `/admin/dictionary/alias` | GET·POST | 별칭 만들기·돌리기 | 즉시 |
 | `/admin/dictionary/rebuild` | **POST만** | 새 인덱스로 옮기고 전환 | 문서 수에 따라 수 분 |
+| `/admin/indices` | GET | 남아 있는 인덱스·지워도 되는 것 | `_cat` 한 번. 즉시 |
 
 `rebuild`만 POST인 이유: 인덱스를 새로 만들고 문서를 통째로 복사하므로, 주소가 어딘가
 남아 잘못 눌리면 안 됩니다.
@@ -204,13 +205,81 @@ https://<서버주소>/admin/dictionary/alias?index=notices_v4&token=<토큰>
 재색인할 때마다 인덱스가 하나씩 쌓이고, **자동으로 지우지 않습니다.** 되돌릴 곳이 남아 있어야
 하기 때문입니다.
 
-지우는 엔드포인트는 일부러 만들지 않았습니다. 인덱스 삭제는 되돌릴 수 없는데 공유 토큰 하나로
-열어 두기엔 위험합니다(#6에서 다룰 부분). 가끔 OpenSearch 대시보드나 PC에서 직접 지웁니다.
+### 먼저 무엇이 남아 있는지 봅니다
 
-지울 때 기준:
-- 지금 별칭이 가리키는 것은 **절대 지우지 않습니다**(`/health?deep=1`의 `points_at`)
-- 바로 앞 것 하나는 되돌릴 곳으로 남겨 둡니다
-- `notices_v3`·`notices_v4` 같은 옛 이름도 한동안 두는 편이 낫습니다
+브라우저 주소창에 붙여넣습니다.
+
+```
+https://<서버주소>/admin/indices?token=<토큰>
+```
+
+```json
+{
+  "alias": "notices_live",
+  "env_index": "notices_v3",
+  "total": 4,
+  "droppable": 1,
+  "indices": [
+    {"name": "notices_20260928221926", "docs": 2439, "size": "41.2mb", "aliases": ["notices_live"],
+     "keep": "별칭 'notices_live'가 가리키는 중 — 지우면 검색이 멈춥니다"},
+    {"name": "notices_v3", "docs": 2439, "size": "40.8mb", "aliases": [],
+     "keep": "NOTICE_INDEX — 별칭이 없을 때 돌아갈 이름"},
+    {"name": "notices_v2", "docs": 2401, "size": "39.1mb", "aliases": [],
+     "keep": "되돌릴 곳으로 남겨 둠(바로 앞 세대)"},
+    {"name": "notices",    "docs": 1980, "size": "31.0mb", "aliases": [], "keep": ""}
+  ]
+}
+```
+
+**`keep`이 빈 것만 지워도 되는 후보입니다.** `droppable`이 그 개수입니다. 판단 기준은 셋입니다.
+
+| 왜 두는가 | 지우면 |
+|---|---|
+| 별칭이 가리키는 중 | 검색·색인이 그 자리에서 멈춥니다 |
+| `NOTICE_INDEX` | 별칭이 사라졌을 때 돌아갈 곳이 없어집니다 |
+| 바로 앞 세대 하나 | 재색인이 잘못됐을 때 되돌릴 곳이 없어집니다 |
+
+세대는 **만든 시각**으로 셉니다. 이름으로 세면 `notices_v3`와 `notices_20260928221926`을 글자로
+비교해 `v`가 숫자보다 커서 순서가 뒤집히고, 재색인이 중간에 끊겨 남은 찌꺼기를 되돌릴 곳으로
+착각합니다.
+
+CLI로도 같은 것을 봅니다.
+
+```bash
+py -m notice_ai.cli indices
+```
+
+```
+별칭 notices_live · NOTICE_INDEX notices_v3
+
+  notices_20260928221926    2,439건    41.2mb  별칭 'notices_live'가 가리키는 중 — 지우면 검색이 멈춥니다
+  notices_v3                2,439건    40.8mb  NOTICE_INDEX — 별칭이 없을 때 돌아갈 이름
+  notices_v2                2,401건    39.1mb  되돌릴 곳으로 남겨 둠(바로 앞 세대)
+· notices                   1,980건    31.0mb  지워도 됩니다
+
+인덱스 4개 · 지워도 되는 후보 1개(· 표시)
+```
+
+### 지우는 것은 손으로 합니다
+
+지우는 엔드포인트도, CLI 명령도 **일부러 만들지 않았습니다.** 인덱스 삭제는 되돌릴 수 없는데
+공유 토큰 하나로 열어 두기엔 위험합니다(#6에서 다룰 부분). AWS OpenSearch 대시보드의 Dev Tools나
+PC에서 직접 지웁니다.
+
+```
+DELETE /notices
+```
+
+지우기 전에 한 번 더 확인할 것:
+- `/admin/indices`에서 그 이름의 `keep`이 **비어 있는가**
+- `/health?deep=1`의 `points_at`과 **다른 이름인가**
+- `aliases`가 **비어 있는가**(다른 별칭이 붙어 있으면 누군가 쓰고 있습니다)
+
+### `notices_v2`·`notices`는 어떻게 하나 (#12)
+
+비교용으로 만들어 둔 것들입니다. `/admin/indices`를 열어 `keep`이 빈 것만 지웁니다. 지금 기준으로는
+보통 `notices_v2`가 되돌릴 곳으로 남고 그보다 오래된 `notices`가 후보로 나옵니다. 용량이 급하지
+않으면 서두를 이유는 없습니다 — 다만 재색인이 쌓이는 만큼 한 번씩 봐 주는 편이 낫습니다.
 
 ---
 
@@ -236,6 +305,7 @@ Render Environment 탭에서:
 py -m notice_ai.cli alias --index notices_v4   # 별칭 만들기·돌리기
 py -m notice_ai.cli rebuild-dict               # 사전 갱신 → 새 인덱스 → 전환
 py -m notice_ai.cli check-dict                 # 진단(색인 안 건드림)
+py -m notice_ai.cli indices                    # 남아 있는 인덱스 훑기(읽기만)
 ```
 
 **`setup-index`를 직접 쓸 때 주의**: 코인 목록은 프로세스 메모리 캐시라 CLI에서는 비어 있습니다.

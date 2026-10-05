@@ -41,8 +41,11 @@ class FakeIndices:
         self._check()
         return bool(self._for_alias(name))
 
-    def get_alias(self, name: str) -> dict:
+    def get_alias(self, name: str = "", index: str = "") -> dict:
         self._check()
+        if index:                       # 패턴으로 물으면 인덱스별 별칭 전부를 준다
+            return {i: {"aliases": {a: {} for a in sorted(al)}}
+                    for i, al in self.indices.items()}
         found = self._for_alias(name)
         if not found:
             raise Boom(f"별칭 없음: {name}")
@@ -70,9 +73,33 @@ class FakeIndices:
         return {"acknowledged": True}
 
 
+class FakeCat:
+    """`cat.indices` 흉내. 만든 시각(epoch ms)은 넘겨받은 순서대로 준다."""
+
+    def __init__(self, owner: "FakeIndices", created: dict[str, int] | None = None):
+        self.owner = owner
+        self.created = created or {}
+
+    def indices(self, index: str = "*", format: str = "json", h: str = "") -> list[dict]:
+        rows = []
+        for i, name in enumerate(sorted(self.owner.indices)):
+            at = self.created.get(name, 1_700_000_000_000 + i)
+            rows.append({
+                "index": name,
+                "docs.count": "100",
+                "store.size": "1mb",
+                "creation.date": str(at),
+                "creation.date.string": str(at),
+                "health": "green",
+            })
+        return rows
+
+
 class FakeClient:
-    def __init__(self, indices: dict[str, set[str]] | None = None):
+    def __init__(self, indices: dict[str, set[str]] | None = None,
+                 created: dict[str, int] | None = None):
         self.indices = FakeIndices(indices)
+        self.cat = FakeCat(self.indices, created)
 
 
 @pytest.fixture(autouse=True)
@@ -206,3 +233,83 @@ def test_답을_기억해_두고_다시_안_묻는다():
 
     index_ref.forget()
     assert index_ref.target(client) == "notices_v3"
+
+
+# ── 남아 있는 인덱스 훑기 ────────────────────────────────────────────────
+OLDER = "notices_20251201000000"
+ORPHAN = "notices_20260303000000"      # 재색인이 중간에 끊겨 남은 것(가장 나중에 만들어졌다)
+
+
+def 훑기(client) -> dict[str, str]:
+    return {d["name"]: d["keep"] for d in index_ref.inventory(client=client)}
+
+
+def test_쓰는_것과_되돌릴_곳만_지키고_나머지는_후보로_둔다():
+    client = FakeClient({
+        "notices": set(), OLDER: set(), NEW: {ALIAS},
+    }, created={"notices": 1, OLDER: 2, NEW: 3})
+    keep = 훑기(client)
+
+    assert "가리키는 중" in keep[NEW]
+    assert "되돌릴 곳" in keep[OLDER]
+    assert keep["notices"] == "", "오래된 것까지 붙잡고 있으면 정리할 수 없다"
+
+
+def test_NOTICE_INDEX는_별칭이_가리키지_않아도_지킨다():
+    """별칭이 사라지면 코드가 돌아갈 이름이다."""
+    client = FakeClient({"notices_v3": set(), NEW: {ALIAS}},
+                        created={"notices_v3": 1, NEW: 2})
+    assert "NOTICE_INDEX" in 훑기(client)["notices_v3"]
+
+
+def test_재색인이_끊겨_남은_더_새_인덱스는_되돌릴_곳이_아니다():
+    """지금 쓰는 것보다 **나중에** 만들어진 것은 세대가 앞이 아니라 찌꺼기다.
+
+    이름으로 줄 세우면 이 구분이 안 된다. 만든 시각으로 세는 이유.
+    """
+    client = FakeClient({OLDER: set(), NEW: {ALIAS}, ORPHAN: set()},
+                        created={OLDER: 1, NEW: 2, ORPHAN: 3})
+    keep = 훑기(client)
+
+    assert keep[ORPHAN] == "", "끊긴 재색인 찌꺼기를 되돌릴 곳으로 붙잡았다"
+    assert "되돌릴 곳" in keep[OLDER]
+
+
+def test_이름이_아니라_만든_시각으로_줄_세운다():
+    """이름의 시각이 실제 만든 시각과 다를 수 있다. 줄 세우는 기준은 이름이 아니다.
+
+    아래에서 이름으로 세우면 'notices_20250101…' 이 맨 아래로 가지만, 실제로는 가장
+    나중에 만들어졌다(끊긴 재색인 찌꺼기). 맨 앞에 와야 한다.
+    """
+    MISNAMED = "notices_20250101000000"
+    client = FakeClient(
+        {MISNAMED: set(), NEW: {ALIAS}, OLDER: set()},
+        created={OLDER: 1, NEW: 2, MISNAMED: 9},
+    )
+    assert [d["name"] for d in index_ref.inventory(client=client)] == [MISNAMED, NEW, OLDER]
+
+
+def test_다른_별칭이_붙어_있으면_지키고_이유를_적는다():
+    client = FakeClient({OLDER: {"notices_backup"}, NEW: {ALIAS}},
+                        created={OLDER: 1, NEW: 2})
+    assert "notices_backup" in 훑기(client)[OLDER]
+
+
+def test_시스템_인덱스는_세지_않는다():
+    client = FakeClient({".kibana": set(), NEW: {ALIAS}}, created={".kibana": 1, NEW: 2})
+    assert ".kibana" not in 훑기(client)
+
+
+def test_건수와_용량을_같이_준다():
+    rows = index_ref.inventory(client=FakeClient({NEW: {ALIAS}}))
+    assert rows[0]["docs"] == 100 and rows[0]["size"] == "1mb"
+    assert rows[0]["aliases"] == [ALIAS]
+    assert "_at" not in rows[0], "내부 정렬 열쇠가 응답에 샜다"
+
+
+def test_목록을_못_읽으면_왜인지_말한다():
+    client = FakeClient({NEW: {ALIAS}})
+    client.indices.fail = True
+    client.cat.indices = lambda **kw: (_ for _ in ()).throw(Boom("접속 불가"))
+    with pytest.raises(RuntimeError, match="읽지 못했습니다"):
+        index_ref.inventory(client=client)

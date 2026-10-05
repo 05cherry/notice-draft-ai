@@ -8,7 +8,9 @@
   check-copy                 짧은 줄을 복사 판정에 넣으면 어떻게 되는지 확인
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
-  collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
+  collect [--category 이름] [--max-pages N] [--no-body] [--no-embed] [--gap 초] [--incremental]
+                             공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략).
+                             --incremental: 새 공지만(기존만 나오는 페이지에서 멈춤), --gap: 요청 간격
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
   search <검색어> [--category 이름] [--hybrid] [--rerank] [--limit N]
@@ -68,6 +70,10 @@ def main() -> None:
     pc.add_argument("--max-pages", type=int, default=None, help="카테고리당 최대 페이지(테스트용)")
     pc.add_argument("--no-body", action="store_true", help="본문 없이 목록만 색인(빠름)")
     pc.add_argument("--no-embed", action="store_true", help="새 공지 임베딩 생략(나중에 embed로)")
+    pc.add_argument("--gap", type=float, default=2.0,
+                    help="요청 사이 최소 간격(초). 429가 잦으면 늘린다(기본 2.0)")
+    pc.add_argument("--incremental", action="store_true",
+                    help="새 공지만: 신규 없는 페이지에서 그 카테고리를 멈춘다(최신순)")
 
     pi = sub.add_parser("ingest-csv")
     pi.add_argument("path", help="공지 CSV 경로")
@@ -196,12 +202,16 @@ def main() -> None:
                   f" · {r['took_sec']}초")
     elif a.command == "collect":
         from notice_ai.collector import collect_all, collect_category
+        from notice_ai.scraper_client import BithumbScraper
 
         fetch_body = not a.no_body
+        scraper = BithumbScraper(gap_sec=a.gap)
         if a.category:
-            n = collect_category(a.category, max_pages=a.max_pages, fetch_body=fetch_body)
+            n = collect_category(a.category, scraper, max_pages=a.max_pages,
+                                 fetch_body=fetch_body, incremental=a.incremental)
         else:
-            n = collect_all(max_pages=a.max_pages, fetch_body=fetch_body)
+            n = collect_all(scraper, max_pages=a.max_pages,
+                            fetch_body=fetch_body, incremental=a.incremental)
         print(f"신규 수집·색인 {n}건")
         if n and not a.no_embed:
             _embed_new()

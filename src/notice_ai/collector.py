@@ -9,8 +9,11 @@
   2) 상세(detail)에서 본문(content) 받아 평문화 → raw_text
   3) OpenSearch 색인 (dedup: source_url = _id)
 
-속도: 빗썸이 429에 민감. 기본 gap 2초. 429 만나면 대기 후 재시도.
+속도: 빗썸이 429에 민감. 기본 gap 2초(조절 가능). 429 만나면 대기 후 재시도.
 재실행 안전: 이미 색인된 공지(source_url 존재)는 상세 요청도 건너뜀.
+증분(incremental): 공지는 최신순이라, 한 페이지가 통째로 이미 있으면 그 뒤는 전부 더 옛날
+  것이다. 그 페이지에서 멈춰 수백 페이지를 헛도는 것(+429 위험)을 막는다. 과거에 빠진 공지가
+  있을 수 있으므로 기본값은 전량 순회(False)이고, "새 것만 빠르게"일 때만 켠다.
 """
 
 from __future__ import annotations
@@ -74,8 +77,13 @@ def collect_category(
     scraper: BithumbScraper | None = None,
     max_pages: int | None = None,
     fetch_body: bool = True,
+    incremental: bool = False,
 ) -> int:
-    """한 카테고리 전체 순회 색인. 반환값: 신규 색인 건수."""
+    """한 카테고리 전체 순회 색인. 반환값: 신규 색인 건수.
+
+    incremental=True면 신규가 하나도 없는 페이지를 만났을 때 그 카테고리를 멈춘다
+    (최신순이라 그 뒤는 전부 이미 있는 것). "새 공지만 빠르게"일 때 쓴다.
+    """
     if name not in CATEGORY_IDS:
         raise ValueError(f"알 수 없는 카테고리: {name}. 가능: {list(CATEGORY_IDS)}")
     cat_id = CATEGORY_IDS[name]
@@ -91,6 +99,7 @@ def collect_category(
             logger.info("[%s] 총 %d건", name, total)
         if not notices:
             break
+        page_new = 0
         for item in notices:
             doc = _list_item_doc(item)
             url = doc["source_url"]
@@ -103,7 +112,11 @@ def collect_category(
                 doc["raw_text"] = ""
             os_client.index(index=index_ref.target(), id=url, body=doc)
             saved += 1
+            page_new += 1
             logger.info("색인 [%s] %s", name, doc["title"])
+        if incremental and page_new == 0:
+            logger.info("[%s] %d쪽에 새 공지 없음 — 증분 수집 종료", name, page)
+            break
         if max_pages and page >= max_pages:
             break
         if total and page * PAGE_SIZE >= total:
@@ -117,10 +130,13 @@ def collect_all(
     scraper: BithumbScraper | None = None,
     max_pages: int | None = None,
     fetch_body: bool = True,
+    incremental: bool = False,
 ) -> int:
     scraper = scraper or BithumbScraper()
     grand = 0
     for name in CATEGORY_IDS:
-        grand += collect_category(name, scraper, max_pages=max_pages, fetch_body=fetch_body)
+        grand += collect_category(
+            name, scraper, max_pages=max_pages, fetch_body=fetch_body, incremental=incremental
+        )
     logger.info("전체 신규 %d건", grand)
     return grand

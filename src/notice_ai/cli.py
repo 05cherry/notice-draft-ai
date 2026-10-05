@@ -11,6 +11,7 @@
   indices [--pattern 패턴]    남아 있는 인덱스와 각각을 왜 두는지(읽기만 한다)
   prune-indices [--yes]      재색인이 쌓아 둔 옛 인덱스를 치운다(--yes 없으면 보여만 준다)
   collect [--pages N]        공지 수집 → 색인 → 새 공지 임베딩(--no-embed로 생략)
+    --refresh-body           이미 색인된 공지의 본문도 다시 받는다(#9 구분선 적용)
   ingest-csv 경로            사내 CSV 색인 → 새 공지 임베딩(--no-embed로 생략)
   embed                      임베딩 백필(벡터 검색용, Bedrock 필요)
   search <검색어> [--category 이름] [--hybrid] [--rerank] [--limit N]
@@ -76,6 +77,9 @@ def main() -> None:
     pc.add_argument("--max-pages", type=int, default=None, help="카테고리당 최대 페이지(테스트용)")
     pc.add_argument("--no-body", action="store_true", help="본문 없이 목록만 색인(빠름)")
     pc.add_argument("--no-embed", action="store_true", help="새 공지 임베딩 생략(나중에 embed로)")
+    pc.add_argument("--refresh-body", action="store_true",
+                    help="이미 색인된 공지도 본문을 다시 받아 raw_text를 갈아 끼운다(#9). "
+                         "429에 민감하니 --max-pages로 나눠 돌린다")
 
     pi = sub.add_parser("ingest-csv")
     pi.add_argument("path", help="공지 CSV 경로")
@@ -240,12 +244,15 @@ def main() -> None:
         from notice_ai.collector import collect_all, collect_category
 
         fetch_body = not a.no_body
-        if a.category:
-            n = collect_category(a.category, max_pages=a.max_pages, fetch_body=fetch_body)
-        else:
-            n = collect_all(max_pages=a.max_pages, fetch_body=fetch_body)
-        print(f"신규 수집·색인 {n}건")
+        if a.refresh_body and not fetch_body:
+            print("--refresh-body 는 본문을 받아야 뜻이 있습니다. --no-body 와 같이 못 씁니다.")
+            raise SystemExit(2)
+        kw = dict(max_pages=a.max_pages, fetch_body=fetch_body, refresh_body=a.refresh_body)
+        n = collect_category(a.category, **kw) if a.category else collect_all(**kw)
+        print(f"{'본문 갱신' if a.refresh_body else '신규 수집·색인'} {n}건")
         if n and not a.no_embed:
+            # 갱신 때는 임베딩이 그대로 남아 있어 여기서 할 일이 없다. 본문이 구분선 하나만
+            # 달라지므로 벡터를 다시 만들 이유도 없다(호출 비용만 든다).
             _embed_new()
     elif a.command == "ingest-csv":
         from notice_ai.ingest import ingest_csv

@@ -21,7 +21,7 @@ import json
 import re
 import time
 
-import cloudscraper
+from notice_ai.factcheck import BLOCK_SEP
 
 BASE = "https://feed.bithumb.com"
 
@@ -33,6 +33,9 @@ CATEGORY_IDS = {
 }
 
 _TAG_RE = re.compile(r"<[^>]+>")
+# 빗썸은 재개·연기 안내를 본문 위에 <hr>로 구분해 덧붙인다. 태그를 그냥 지우면 그 경계가
+# 사라져서, 나중에 '마지막 안녕하세요부터가 원문'으로 되짚어야 한다(#9). 경계를 남긴다.
+_HR_RE = re.compile(r"<hr\b[^>]*>", re.I)
 _WS_RE = re.compile(r"\n{3,}")
 
 
@@ -42,6 +45,10 @@ class RateLimited(Exception):
 
 class BithumbScraper:
     def __init__(self, gap_sec: float = 2.0):
+        # 여기서 import 한다. html_to_text 는 순수 텍스트 함수인데, 모듈 맨 위에서 받으면
+        # 그것만 쓰려 해도 스크래핑 라이브러리가 깔려 있어야 한다(테스트가 그 경우다).
+        import cloudscraper
+
         self._s = cloudscraper.create_scraper(browser="chrome")
         self._gap = gap_sec
         self._last = 0.0
@@ -109,6 +116,7 @@ def html_to_text(raw: str) -> str:
     unescaped = html.unescape(raw)          # &lt; → < , &nbsp; → 공백 등
     text = unescaped.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
     text = re.sub(r"</(p|li|ul|div)>", "\n", text)
+    text = _HR_RE.sub(f"\n{BLOCK_SEP}\n", text)   # 태그를 지우기 전에 경계를 남긴다(#9)
     text = _TAG_RE.sub("", text)            # 남은 태그 제거
     text = html.unescape(text)              # 혹시 남은 엔티티
     text = _WS_RE.sub("\n\n", text)

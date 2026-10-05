@@ -28,6 +28,7 @@ class FakeIndices:
     def __init__(self, indices: dict[str, set[str]] | None = None):
         self.indices = {k: set(v) for k, v in (indices or {}).items()}
         self.update_calls: list[list[dict]] = []
+        self.deleted: list[str] = []
         self.fail = False
 
     def _check(self):
@@ -59,6 +60,14 @@ class FakeIndices:
         if found := self._for_alias(index):
             return {i: {"settings": {}} for i in found}
         raise Boom(f"없음: {index}")
+
+    def delete(self, index: str) -> dict:
+        self._check()
+        if index not in self.indices:
+            raise Boom(f"없음: {index}")
+        del self.indices[index]
+        self.deleted.append(index)
+        return {"acknowledged": True}
 
     def update_aliases(self, body: dict) -> dict:
         self._check()

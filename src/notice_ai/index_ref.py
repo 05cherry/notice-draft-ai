@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -184,10 +185,10 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
             "health": r.get("health") or "",
             "aliases": aliases_of(name),
             "keep": "",
-            "_at": int(r.get("creation.date") or 0),
+            "created_ms": int(r.get("creation.date") or 0),
         })
 
-    out.sort(key=lambda d: d["_at"], reverse=True)     # 최근에 만든 것이 앞
+    out.sort(key=lambda d: d["created_ms"], reverse=True)   # 최근에 만든 것이 앞
 
     # 되돌릴 곳은 '지금 쓰는 것보다 먼저 만들어진 것' 중에서 센다. 재색인이 중간에 끊겨
     # 지금 쓰는 것보다 나중에 만들어진 인덱스가 남아 있을 수 있는데, 그건 되돌릴 곳이 아니다.
@@ -209,7 +210,7 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
             d["keep"] = "NOTICE_INDEX — 별칭이 없을 때 돌아갈 이름"
         elif d["aliases"]:
             d["keep"] = f"다른 별칭이 붙어 있음({', '.join(d['aliases'])})"
-        elif not d["_at"]:
+        elif not d["created_ms"]:
             # 만든 시각을 못 읽으면 세대를 셀 수 없다. 그 상태로 '지워도 된다'고 말하면
             # 되돌릴 곳을 지우게 할 수 있다. 모르면 모른다고 한다.
             d["keep"] = "만든 시각을 읽지 못했습니다 — 지우기 전에 손으로 확인하세요"
@@ -217,6 +218,89 @@ def inventory(pattern: str = "*", client=None) -> list[dict]:
             d["keep"] = "되돌릴 곳으로 남겨 둠(바로 앞 세대)"
             rollback += 1
 
-    for d in out:
-        d.pop("_at")
     return out
+
+
+# ── 쌓인 인덱스 치우기 ───────────────────────────────────────────────────
+#
+# 재색인이 한 번 돌 때마다 인덱스가 하나 쌓인다(#53). 지우는 기준은 `inventory` 의 판정을
+# 그대로 쓴다 — 기준이 두 벌이 되면 한쪽만 고쳐질 때 지워선 안 될 것을 지운다.
+# 그 위에 둘을 더 얹는다. 삭제는 되돌릴 수 없다.
+#
+#   1) 이름이 자동 생성 꼴(`<앞머리>_<14자리 시각>`)이어야 한다. 손으로 만든 `notices_v4`,
+#      `notices`, 남이 올린 대시보드 샘플 데이터는 이름에서 걸러진다.
+#   2) 갓 만들어진 것은 건드리지 않는다. 다른 프로세스(PC의 CLI 등)가 지금 재색인 중일 수
+#      있고, 그때 만들다 만 인덱스는 아직 별칭이 안 붙어 '지워도 되는' 것처럼 보인다.
+PRUNE_MIN_AGE_SEC = 3600.0
+
+
+def _auto_name_re() -> "re.Pattern[str]":
+    """`dictionary._new_name()` 이 만드는 이름만 고르는 패턴."""
+    base = config.INDEX_NAME.rsplit("_v", 1)[0] or "notices"
+    return re.compile(rf"^{re.escape(base)}_\d{{14}}$")
+
+
+def _alias_targets(client=None) -> list[str]:
+    """별칭이 가리키는 진짜 인덱스들. 없거나 못 읽으면 빈 목록."""
+    if not config.INDEX_ALIAS:
+        return []
+    try:
+        return sorted((client or _client()).indices.get_alias(name=config.INDEX_ALIAS) or {})
+    except Exception:
+        return []
+
+
+def prunable(client=None) -> tuple[list[dict], list[dict]]:
+    """(지워도 되는 것, 조건에 걸려 건너뛴 것). 아무것도 바꾸지 않는다.
+
+    건너뛴 쪽에는 `skip` 에 이유가 붙는다 — 왜 안 지웠는지 보이지 않으면
+    '안 지워졌다' 와 '지울 것이 없었다' 를 가릴 수 없다.
+    """
+    pat = _auto_name_re()
+    now_ms = time.time() * 1000.0
+    rows = inventory(client=client)
+
+    # 별칭이 인덱스 여럿을 가리키면 '지금 쓰는 것' 이 어느 쪽인지 모른다. 그러면 '바로 앞
+    # 세대' 도 모르는 것이라, 한참 오래돼 보이는 인덱스조차 지울 근거가 없다. 손으로 정리할
+    # 상태이므로 후보를 하나도 내놓지 않는다.
+    #
+    # 별칭이 아직 없는 것(0개)은 다른 얘기다. 그때는 NOTICE_INDEX 가 쓰이는 곳이고
+    # 세대를 그 기준으로 셀 수 있다 — 별칭을 만들기 전의 정상 상태다.
+    if len(targets := _alias_targets(client)) > 1:
+        why = (f"별칭 '{config.INDEX_ALIAS}'가 인덱스 여럿({', '.join(targets)})을 가리킵니다 "
+               f"— 어느 쪽이 원본인지 먼저 정하세요")
+        return [], [dict(d, skip=why) for d in rows if not d["keep"]]
+
+    take, skip = [], []
+    for d in rows:
+        if d["keep"]:
+            continue                                  # 지켜야 하는 것은 후보도 아니다
+        d = dict(d)
+        if not pat.match(d["name"]):
+            d["skip"] = "자동 생성된 이름이 아닙니다 — 손으로 지우세요"
+            skip.append(d)
+        elif (now_ms - d["created_ms"]) / 1000.0 < PRUNE_MIN_AGE_SEC:
+            d["skip"] = (f"만든 지 {PRUNE_MIN_AGE_SEC / 3600:.0f}시간이 안 됐습니다 — "
+                         f"다른 곳에서 재색인 중일 수 있습니다")
+            skip.append(d)
+        else:
+            take.append(d)
+    return take, skip
+
+
+def drop(names: list[str], client=None) -> dict:
+    """인덱스를 지운다. **되돌릴 수 없다.** prunable 이 고른 이름만 넘긴다.
+
+    하나가 실패해도 나머지는 계속한다. 지우다 멈추면 어디까지 지웠는지가 흐려진다.
+    """
+    c = client or _client()
+    done, failed = [], {}
+    for name in names:
+        try:
+            c.indices.delete(index=name)
+            done.append(name)
+            logger.info("인덱스 삭제: %s", name)
+        except Exception as e:
+            failed[name] = type(e).__name__
+            logger.warning("인덱스 삭제 실패(%s): %s", name, type(e).__name__)
+    return {"dropped": done, "failed": failed}

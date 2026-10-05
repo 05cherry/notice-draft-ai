@@ -117,7 +117,7 @@ def rebuild(*, client=None, reason: str = "수동") -> dict:
     global _last_finished
     started = time.monotonic()
     out: dict = {"ok": False, "reason": "", "message": "", "source": "", "dest": "",
-                 "rules": 0, "docs": 0, "copied": 0, "at": _stamp(), "trigger": reason}
+                 "rules": 0, "docs": 0, "copied": 0, "pruned": [], "at": _stamp(), "trigger": reason}
     try:
         _set(running=True)
         r = coins.refresh()
@@ -160,6 +160,7 @@ def rebuild(*, client=None, reason: str = "수동") -> dict:
         index_ref.point_at(dest, c)
         left = unindexable([x.name for x in coins.known().values() if x.name], c)
         out.update(ok=True, message=f"{dest}로 전환했습니다(문서 {after}건, 사전 {len(rules)}개).")
+        out["pruned"] = _prune_quietly(c)
         with _state_lock:
             _state["stale"] = sorted(left)
             _state["stale_since"] = _stamp() if left else ""
@@ -174,6 +175,63 @@ def rebuild(*, client=None, reason: str = "수동") -> dict:
         out["took_sec"] = round(time.monotonic() - started, 1)
         _last_finished = time.monotonic()
         _set(running=False, last_rebuild=out)
+        _lock.release()
+
+
+def _prune_quietly(client) -> list[str]:
+    """전환이 끝난 뒤 쌓인 옛 인덱스를 치운다(#53). **재색인 결과를 망치지 않는다.**
+
+    여기서 터뜨리면 멀쩡히 끝난 재색인이 실패로 보고된다. 치우기는 덤이지 본일이 아니다.
+    `_lock` 을 들고 있는 동안에만 불린다 — 다른 재색인이 끼어들지 않는다.
+    """
+    if not config.prune_indices():
+        return []
+    try:
+        take, _ = index_ref.prunable(client)
+        if not take:
+            return []
+        r = index_ref.drop([d["name"] for d in take], client)
+        if r["failed"]:
+            logger.warning("일부 인덱스를 못 지웠습니다: %s", r["failed"])
+        return r["dropped"]
+    except Exception as e:
+        logger.warning("옛 인덱스 정리 실패(%s) — 전환은 끝났습니다.", type(e).__name__)
+        return []
+
+
+def prune(*, client=None, dry_run: bool = False) -> dict:
+    """쌓인 옛 인덱스를 치운다. 재색인과 겹치지 않게 같은 자물쇠를 쓴다.
+
+    `dry_run` 이면 무엇을 지울지만 알려 주고 아무것도 지우지 않는다.
+    """
+    if not _lock.acquire(blocking=False):
+        return {"ok": False, "reason": "already_running", "dry_run": dry_run,
+                "message": "재색인이 돌고 있습니다. 끝난 뒤에 다시 부르세요.",
+                "candidates": [], "skipped": [], "dropped": [], "failed": {}}
+    try:
+        c = client or get_client()
+        take, skip = index_ref.prunable(c)
+        out = {"ok": True, "reason": "", "dry_run": dry_run,
+               "candidates": [d["name"] for d in take],
+               "skipped": [{"name": d["name"], "reason": d["skip"]} for d in skip],
+               "dropped": [], "failed": {}}
+        if not take:
+            out["message"] = "지울 것이 없습니다."
+            return out
+        if dry_run:
+            out["message"] = f"{len(take)}개를 지울 수 있습니다(지우지 않았습니다)."
+            return out
+        r = index_ref.drop(out["candidates"], c)
+        out.update(dropped=r["dropped"], failed=r["failed"],
+                   message=f"{len(r['dropped'])}개를 지웠습니다."
+                           + (f" {len(r['failed'])}개는 실패했습니다." if r["failed"] else ""))
+        return out
+    except Exception as e:
+        logger.exception("인덱스 정리 실패")
+        return {"ok": False, "reason": type(e).__name__, "dry_run": dry_run,
+                "message": " ".join(str(e).split())[:300],
+                "candidates": [], "skipped": [], "dropped": [], "failed": {}}
+    finally:
         _lock.release()
 
 

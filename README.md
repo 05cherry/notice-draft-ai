@@ -147,6 +147,7 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `POST /admin/dictionary/rebuild` | **사전 갱신 → 새 인덱스 → 별칭 전환**(인덱스를 만듭니다) | 없음 |
 | `GET`·`POST /admin/dictionary/alias` | 별칭을 만들거나 다른 인덱스로 돌립니다 | 없음 |
 | `GET /admin/indices` | 남아 있는 인덱스와 각각을 왜 두는지(`pattern`) | 없음 |
+| `POST /admin/indices/prune` | 쌓인 옛 인덱스 치우기. `dry_run` 기본 켜짐, **되돌릴 수 없음** | 없음 |
 | `GET /admin/subtype-check` | 형제 유형 판별이 실제로 어떻게 갈리는지(#38) | 없음 |
 | `GET /admin/copy-check` | 짧은 줄을 복사 판정에 넣으면 어떻게 되는지(#36) | 없음 |
 

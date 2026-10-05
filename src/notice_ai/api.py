@@ -442,6 +442,7 @@ class RebuildResponse(BaseModel):
     rules: int = 0               # 새 인덱스에 들어간 사전 규칙 수
     docs: int = 0                # 새 인덱스의 문서 수
     copied: int = 0
+    pruned: list[str] = []       # 전환 뒤 치운 옛 인덱스(#53)
     at: str = ""
     trigger: str = ""
     took_sec: float = 0
@@ -495,6 +496,7 @@ class IndexRow(BaseModel):
     docs: int
     size: str
     created: str
+    created_ms: int              # 같은 값을 숫자로(정렬·나이 계산용)
     health: str
     aliases: list[str]
     keep: str                    # 왜 두는지. 빈 문자열이면 지워도 되는 후보
@@ -534,6 +536,43 @@ async def admin_indices(
         droppable=sum(1 for r in rows if not r["keep"]),
         indices=[IndexRow(**r) for r in rows],
     )
+
+
+class PruneSkipped(BaseModel):
+    name: str
+    reason: str
+
+
+class PruneResponse(BaseModel):
+    ok: bool
+    reason: str = ""
+    message: str = ""
+    dry_run: bool = False
+    candidates: list[str] = []           # 지울 수 있다고 본 것
+    skipped: list[PruneSkipped] = []     # 후보였지만 조건에 걸린 것 + 이유
+    dropped: list[str] = []              # 실제로 지운 것
+    failed: dict[str, str] = {}          # 못 지운 것 → 오류 종류
+
+
+@app.post("/admin/indices/prune", response_model=PruneResponse)
+async def admin_indices_prune(
+    dry_run: bool = Query(True, description="켜 두면 무엇을 지울지만 알려 준다. 기본 켜짐"),
+) -> PruneResponse:
+    """재색인이 쌓아 둔 옛 인덱스를 치운다(#53). **되돌릴 수 없다.**
+
+    평소에는 재색인이 성공할 때마다 저절로 돈다(`DICT_PRUNE=0`으로 끔). 이 엔드포인트는
+    지금 당장 치우고 싶을 때, 또는 자동을 끈 채로 손으로 돌릴 때 쓴다.
+
+    `dry_run`이 **기본으로 켜져 있다.** 끄려면 `?dry_run=0`을 붙인다 — 지우는 호출을
+    실수로 하기 어렵게 둔 것이다. GET은 받지 않는다(주소가 남아 잘못 눌리면 안 된다).
+
+    지우는 기준은 `/admin/indices`의 `keep` 판정 그대로에, 이름이 자동 생성 꼴이어야 하고
+    갓 만든 것은 건드리지 않는다는 조건을 더한 것이다. 손으로 만든 `notices_v4` 같은 이름은
+    `skipped`에 이유와 함께 남는다.
+    """
+    from notice_ai import dictionary
+
+    return PruneResponse(**await asyncio.to_thread(dictionary.prune, dry_run=dry_run))
 
 
 class SubtypeCheckResponse(BaseModel):

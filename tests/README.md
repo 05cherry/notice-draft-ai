@@ -44,6 +44,7 @@ py tests/try_extract.py 2 5        # 2·5번만
 | `test_copy_check.py` | 복사 판정에 쓸 줄 고르기 — 자리표시자뿐인 줄은 뺀다(#36) |
 | `test_index_ref.py` | 별칭 층 — 전환이 호출 한 번, 별칭을 인덱스로 착각하지 않기(#34·#47) |
 | `test_auth.py` | 공유 토큰 — POST 가 303 으로 새지 않기(#46), 비ASCII 토큰에 500 안 내기 |
+| `test_prune.py` | 쌓인 인덱스 치우기 — **지워선 안 될 것을 지우지 않기**(#53) |
 
 OpenSearch가 필요한 자리는 가짜 클라이언트로 대신합니다(`test_index_ref.py`의 `FakeClient`).
 

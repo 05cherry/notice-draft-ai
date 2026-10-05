@@ -9,7 +9,7 @@
 ## 목차
 1. [먼저 알아야 할 것 — 별칭](#먼저-알아야-할-것--별칭)
 2. [처음 한 번: 별칭 만들기](#처음-한-번-별칭-만들기)
-3. [엔드포인트 다섯](#엔드포인트-다섯)
+3. [엔드포인트 여섯](#엔드포인트-여섯)
 4. [평소에 보는 법](#평소에-보는-법)
 5. [사전이 뒤처졌을 때](#사전이-뒤처졌을-때)
 6. [되돌리기](#되돌리기)
@@ -46,6 +46,7 @@ notices_live  ──▶  notices_20260928120000     ← 검색·색인은 왼쪽
 | `NOTICE_INDEX` | `notices_v3` | 별칭이 없을 때 쓰는 이름이자, 새 인덱스 이름의 앞머리 |
 | `DICT_AUTO_REBUILD` | `1` | 0이면 감지만 하고 재색인은 안 한다 |
 | `DICT_REBUILD_MIN_SEC` | `21600` | 재색인 최소 간격(6시간) |
+| `DICT_PRUNE` | `1` | 0이면 쌓인 옛 인덱스를 자동으로 지우지 않는다 |
 
 ---
 
@@ -85,7 +86,7 @@ https://<서버주소>/admin/dictionary/alias?index=notices_v4&token=<토큰>
 
 ---
 
-## 엔드포인트 다섯
+## 엔드포인트 여섯
 
 모두 `?token=<토큰>`이 필요합니다.
 
@@ -96,6 +97,7 @@ https://<서버주소>/admin/dictionary/alias?index=notices_v4&token=<토큰>
 | `/admin/dictionary/alias` | GET·POST | 별칭 만들기·돌리기 | 즉시 |
 | `/admin/dictionary/rebuild` | **POST만** | 새 인덱스로 옮기고 전환 | 문서 수에 따라 수 분 |
 | `/admin/indices` | GET | 남아 있는 인덱스·지워도 되는 것 | `_cat` 한 번. 즉시 |
+| `/admin/indices/prune` | **POST만** | 쌓인 옛 인덱스 치우기. **되돌릴 수 없음** | 즉시 |
 
 `rebuild`만 POST인 이유: 인덱스를 새로 만들고 문서를 통째로 복사하므로, 주소가 어딘가
 남아 잘못 눌리면 안 됩니다.
@@ -260,26 +262,81 @@ py -m notice_ai.cli indices
 인덱스 4개 · 지워도 되는 후보 1개(· 표시)
 ```
 
-### 지우는 것은 손으로 합니다
+### 자동으로 치웁니다 (#53)
 
-지우는 엔드포인트도, CLI 명령도 **일부러 만들지 않았습니다.** 인덱스 삭제는 되돌릴 수 없는데
-공유 토큰 하나로 열어 두기엔 위험합니다(#6에서 다룰 부분). AWS OpenSearch 대시보드의 Dev Tools나
-PC에서 직접 지웁니다.
+**재색인이 성공할 때마다** 쌓인 옛 인덱스를 치웁니다. 한 번 돌 때마다 100mb 넘게 쌓이는데
+치우는 쪽이 없으면 1년에 1~3GB가 되고, 디스크가 차면 자동 갱신이 **조용히 실패합니다** —
+검색은 계속 되는데 새로 상장된 코인만 안 잡히는 상태라 원인을 찾기 어렵습니다.
+
+지우는 기준은 위 표 그대로에 **두 가지를 더** 얹습니다. 삭제는 되돌릴 수 없으니까요.
+
+| 조건 | 왜 |
+|---|---|
+| 이름이 `notices_<14자리 시각>` 꼴이어야 함 | 손으로 만든 `notices_v4`·`notices`, 남이 올린 대시보드 샘플 데이터를 이름에서 걸러냅니다 |
+| 만든 지 1시간이 지났어야 함 | 다른 곳(PC의 CLI 등)에서 지금 재색인 중일 수 있습니다. 만들다 만 인덱스는 별칭이 아직 없어서 '지워도 되는' 것처럼 보입니다 |
+| 별칭이 인덱스 **여럿**을 가리키면 아무것도 안 지움 | 어느 쪽이 지금 쓰는 것인지 모르면 '바로 앞 세대'도 모릅니다 |
+
+치우다 실패해도 **재색인 결과는 그대로 둡니다.** 치우기는 덤이지 본일이 아닙니다.
+무엇을 치웠는지는 `rebuild` 응답의 `pruned`와 `/admin/dictionary/status`의
+`last_rebuild.pruned`에 남습니다.
+
+끄려면 Render Environment 탭에 `DICT_PRUNE=0`. 재시작 없이 꺼집니다.
+
+### 지금 당장 치우고 싶을 때
+
+```bash
+curl -X POST "https://<서버주소>/admin/indices/prune?token=<토큰>"              # 보여만 준다
+curl -X POST "https://<서버주소>/admin/indices/prune?token=<토큰>&dry_run=0"     # 실제로 지운다
+```
+
+**`dry_run`이 기본으로 켜져 있습니다.** 지우려면 `dry_run=0`을 붙입니다 — 지우는 호출을
+실수로 하기 어렵게 둔 것입니다. GET은 받지 않습니다(주소가 어딘가 남아 잘못 눌리면 안 됩니다).
+
+```json
+{
+  "ok": true, "dry_run": true,
+  "message": "2개를 지울 수 있습니다(지우지 않았습니다).",
+  "candidates": ["notices_20260901000000", "notices_20260801000000"],
+  "skipped": [{"name": "notices", "reason": "자동 생성된 이름이 아닙니다 — 손으로 지우세요"}],
+  "dropped": [], "failed": {}
+}
+```
+
+`skipped`에 **왜 안 지웠는지**가 남습니다. 이게 없으면 '안 지워졌다'와 '지울 것이 없었다'를
+가릴 수 없습니다.
+
+CLI로도 같습니다.
+
+```bash
+py -m notice_ai.cli prune-indices          # 보여만 준다
+py -m notice_ai.cli prune-indices --yes    # 실제로 지운다
+```
 
 ```
-DELETE /notices
+  건너뜀  notices  — 자동 생성된 이름이 아닙니다 — 손으로 지우세요
+  지울 것  notices_20260901000000
+  지울 것  notices_20260801000000
+
+2개를 지울 수 있습니다(지우지 않았습니다).
+실제로 지우려면 --yes 를 붙입니다. 되돌릴 수 없습니다.
+```
+
+재색인이 돌고 있으면 거부합니다(`already_running`). 그 재색인이 만든 인덱스를 전환하기 전에
+지울 수 있어서입니다.
+
+### 손으로 지워야 하는 것
+
+자동 생성 꼴이 아닌 이름(`notices_v2`, `notices`, 대시보드 샘플 데이터 등)은 코드가 건드리지
+않습니다. AWS OpenSearch 대시보드의 Dev Tools에서 직접 지웁니다.
+
+```
+DELETE /notices_v2
 ```
 
 지우기 전에 한 번 더 확인할 것:
 - `/admin/indices`에서 그 이름의 `keep`이 **비어 있는가**
 - `/health?deep=1`의 `points_at`과 **다른 이름인가**
 - `aliases`가 **비어 있는가**(다른 별칭이 붙어 있으면 누군가 쓰고 있습니다)
-
-### `notices_v2`·`notices`는 어떻게 하나 (#12)
-
-비교용으로 만들어 둔 것들입니다. `/admin/indices`를 열어 `keep`이 빈 것만 지웁니다. 지금 기준으로는
-보통 `notices_v2`가 되돌릴 곳으로 남고 그보다 오래된 `notices`가 후보로 나옵니다. 용량이 급하지
-않으면 서두를 이유는 없습니다 — 다만 재색인이 쌓이는 만큼 한 번씩 봐 주는 편이 낫습니다.
 
 ---
 
@@ -292,6 +349,7 @@ Render Environment 탭에서:
 | 감지만 하고 재색인은 수동으로 | `DICT_AUTO_REBUILD=0` |
 | 더 자주 돌게 | `DICT_REBUILD_MIN_SEC`를 낮춘다 |
 | 별칭 자체를 안 씀 | `NOTICE_ALIAS`를 빈 값으로 |
+| 옛 인덱스를 자동으로 안 지움 | `DICT_PRUNE=0` |
 
 `DICT_AUTO_REBUILD`는 호출할 때마다 환경변수를 다시 읽으므로 **재시작 없이** 꺼집니다.
 
@@ -306,6 +364,7 @@ py -m notice_ai.cli alias --index notices_v4   # 별칭 만들기·돌리기
 py -m notice_ai.cli rebuild-dict               # 사전 갱신 → 새 인덱스 → 전환
 py -m notice_ai.cli check-dict                 # 진단(색인 안 건드림)
 py -m notice_ai.cli indices                    # 남아 있는 인덱스 훑기(읽기만)
+py -m notice_ai.cli prune-indices              # 쌓인 옛 인덱스 치우기(--yes 로 실행)
 ```
 
 **`setup-index`를 직접 쓸 때 주의**: 코인 목록은 프로세스 메모리 캐시라 CLI에서는 비어 있습니다.

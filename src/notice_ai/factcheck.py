@@ -116,7 +116,8 @@ def clauses(text: str) -> set[str]:
 
 # ── 참고 공지: 업데이트 전(최초) 버전 복원 ───────────────────────────────────
 # 빗썸은 재개·연기·정상화 등이 생기면 같은 공지를 고친다: 제목 끝에 '(09/12 재개)'를 붙이고,
-# 본문 맨 위에 <hr>로 구분한 안내를 덧붙인다(수집 시 태그가 지워져 raw_text에는 구분선이 없다).
+# 본문 맨 위에 <hr>로 구분한 안내를 덧붙인다(#9부터 수집 때 BLOCK_SEP으로 남긴다.
+# 그 전에 색인된 공지에는 없으므로 아래 '안녕하세요' 규칙이 계속 필요하다).
 # 실측(4개 카테고리 2,439건): 업데이트 안내는 항상 원문 '위'에 쌓이고, 원문은 마지막 '안녕하세요'부터다.
 #   - 재개 블록이 인사 없이 붙은 경우 1,041건 / 재개 블록도 '안녕하세요'로 시작 27건 / 여러 번 쌓임(USDT 등)
 #   - 제목만 바뀐 경우 147건(원문 아래에 덧붙인 사례 0건)
@@ -129,22 +130,59 @@ _GREETING_RE = re.compile(r"안녕하세요")
 _INVISIBLE_RE = re.compile(r"[\ufeff\u200b\u200c\u200d]")   # BOM·폭 없는 공백(일부 옛 공지 앞에 붙어 있음)
 MIN_ORIGINAL = 100     # 잘라낸 원문이 이보다 짧으면 판단이 불확실하므로 자르지 않는다
 
+# 수집할 때 <hr>을 이 글자로 남긴다(#9). 글자를 고르는 기준이 둘 있었다.
+#   - 공지 본문에 나올 수 없어야 한다. '-----'나 '─────'는 실제 공지에 쓰일 수 있어서
+#     구분선과 구별이 안 된다. 잘못 갈리면 원문의 앞부분을 잃는다.
+#   - 새어 나가도 해롭지 않아야 한다. raw_text는 검색 색인과 검색창 미리보기에도 쓰인다.
+#     폼 피드(U+000C)는 Nori가 버리는 제어문자고 브라우저에서 아무것도 그리지 않는다.
+#
+# 보이지 않는 글자라 디버깅이 번거롭다는 단점이 있다. 대신 여기와 docs/GOTCHAS.md에 적어 둔다.
+BLOCK_SEP = "\f"
+_SEP_RE = re.compile(r"\n*\f\n*")
+
+
+def strip_block_sep(text: str) -> str:
+    """구분 표시를 떼고 빈 줄 하나로 되돌린다.
+
+    `original_version`이 내보내는 본문에는 이 글자가 남아선 안 된다. 원문 안쪽에 장식으로
+    쓰인 <hr>도 있고, 그건 프롬프트에 들어가 LLM이 베낄 수 있다.
+    """
+    return _SEP_RE.sub("\n\n", text or "").strip()
+
 
 def original_version(title: str, body: str) -> tuple[str, str, list[str]]:
-    """업데이트된 공지에서 최초 버전(제목·본문)을 복원한다. (제목, 본문, 제거 내역)."""
+    """업데이트된 공지에서 최초 버전(제목·본문)을 복원한다. (제목, 본문, 제거 내역).
+
+    자르는 기준이 둘이고, **구분선이 있으면 그쪽을 먼저 쓴다**(#9).
+
+    구분선(`BLOCK_SEP`)은 빗썸이 실제로 블록을 나눈 자리 그대로다. '안녕하세요' 규칙은
+    그걸 잃어버린 뒤의 복원이라, 업데이트 안내가 인사 없이 붙거나(실측 1,041건) 원문
+    안쪽에 '안녕하세요'가 또 있으면 어긋날 수 있다 — 뒤쪽 인사에서 자르면 원문의
+    앞부분을 잃는다.
+
+    구분선은 **새로 수집한 공지에만** 있다. 이미 색인된 공지의 raw_text에는 없으므로
+    (수집 때 태그가 지워졌다) 없으면 전과 똑같이 인사 규칙으로 돈다.
+    """
     notes: list[str] = []
-    t = title or ""
+    t = strip_block_sep(title or "")
     while m := _UPDATE_TAG_RE.search(t):
         notes.append(f"제목 꼬리표 '{m.group(0).strip()}' 제거")
         t = t[:m.start()].rstrip()
     b = _INVISIBLE_RE.sub("", body or "")
-    starts = [m.start() for m in _GREETING_RE.finditer(b)]
-    if starts:
-        head, orig = b[:starts[-1]].strip(), b[starts[-1]:]
-        if head and len(orig.strip()) >= MIN_ORIGINAL:
-            notes.append(f"본문 위에 덧붙은 업데이트 안내 {len(head)}자 제외")
+
+    if BLOCK_SEP in b:
+        head, _, orig = b.rpartition(BLOCK_SEP)     # 업데이트는 위에 쌓이므로 마지막 구분선 뒤가 원문
+        if head.strip() and len(strip_block_sep(orig)) >= MIN_ORIGINAL:
+            notes.append(f"구분선 위에 덧붙은 업데이트 안내 {len(strip_block_sep(head))}자 제외")
             b = orig
-    return t, b, notes
+    else:
+        starts = [m.start() for m in _GREETING_RE.finditer(b)]
+        if starts:
+            head, orig = b[:starts[-1]].strip(), b[starts[-1]:]
+            if head and len(orig.strip()) >= MIN_ORIGINAL:
+                notes.append(f"본문 위에 덧붙은 업데이트 안내 {len(head)}자 제외")
+                b = orig
+    return t, strip_block_sep(b), notes
 
 
 # ── 참고 공지 마스킹 ─────────────────────────────────────────────────────

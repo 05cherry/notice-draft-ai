@@ -91,6 +91,7 @@ py -m notice_ai.cli check-dict                     # 코인명이 조각나는�
 #   서버에 올려 뒀으면 GET /admin/user-dictionary 로도 같은 걸 봅니다(밖에서 브라우저로)
 py -m notice_ai.cli setup-index                    # Nori + kNN 인덱스 생성(코인명 사용자 사전 포함)
 py -m notice_ai.cli collect                        # 공지 수집·색인 → 새 공지 임베딩까지 (--no-embed로 생략)
+py -m notice_ai.cli collect --refresh-body --max-pages 2   # 이미 색인된 공지의 본문도 다시 받기(#9)
 py -m notice_ai.cli ingest-csv 공지데이터.csv       # 사내 CSV 색인(전체 이력·본문) → 새 공지 임베딩까지
 py -m notice_ai.cli embed                          # 임베딩 없는 공지만 채우기(재실행 안전)
 ```

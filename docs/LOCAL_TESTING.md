@@ -132,7 +132,42 @@ py -m notice_ai.cli search "점검" --category 점검
 
 ---
 
-## 4. 막히면
+## 4. 자동화 (하루 1회, 로컬 PC)
+
+새 공지는 자동 수집되지 않는다(자동 백그라운드는 코인 사전 갱신뿐). 매일 한 번 증분 수집을
+돌리려면 **Windows 작업 스케줄러**에 `scripts/daily_collect.sh`를 건다. 스크래퍼는 가정용 IP가
+안전해서(데이터센터 IP는 Cloudflare가 더 막는다) 로컬에서 돌린다.
+
+`scripts/daily_collect.sh`가 하는 일: `scripts/env.sh` 로드 → `collect --incremental --gap 4`
+(전 카테고리, 새 것만) → 자동 임베딩 → `scripts/logs/daily_collect.log` 기록.
+
+### 등록 (PowerShell에서 한 번만. 경로는 본인 저장소 위치로)
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "C:\Program Files\Git\bin\bash.exe" -Argument "/c/Users/user/PycharmProjects/notice-draft-ai/scripts/daily_collect.sh"
+$trigger = New-ScheduledTaskTrigger -Daily -At "19:00"
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+Register-ScheduledTask -TaskName "notice-ai-daily-collect" -Action $action -Trigger $trigger -Settings $settings -Description "빗썸 공지 증분 수집 (하루 1회)" -Force
+```
+
+- 매일 **19:00(KST)** 실행. `-StartWhenAvailable`라 그 시각에 PC가 꺼져 있었으면 다음에 켜질 때 따라잡는다.
+- 기본은 "로그온해 있을 때" 실행 — PC가 그 시각에 켜져 있으면 된다.
+
+### 확인 · 수동 실행 · 해제
+
+```powershell
+Get-ScheduledTaskInfo    -TaskName "notice-ai-daily-collect"              # NextRunTime·LastRunTime·결과
+Start-ScheduledTask      -TaskName "notice-ai-daily-collect"              # 지금 한 번 돌려 테스트
+Unregister-ScheduledTask -TaskName "notice-ai-daily-collect" -Confirm:$false   # 자동화 끄기
+```
+
+로그는 `scripts/logs/daily_collect.log`(실행마다 시작·종료·결과가 쌓임, gitignore).
+
+> 과거 이력의 구멍(예: 안내)은 증분으로 안 메워진다 → `scripts/collect.sh --category <이름>` 전량으로 따로 백필.
+
+---
+
+## 5. 막히면
 
 | 증상 | 조치 |
 |---|---|

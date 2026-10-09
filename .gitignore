@@ -9,3 +9,4 @@ __pycache__/
 scripts/env.sh
 env.local.ps1
 collect_*.log
+scripts/logs/

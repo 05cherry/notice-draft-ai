@@ -125,3 +125,32 @@ def test_본문을_받지_않는다(monkeypatch):
     list(routing_check._titles(object(), "notices_live", ["점검"]))
     assert 물어본것[0]["_source"] == ["title", "categories"]
     assert 물어본것[0]["query"] == {"terms": {"categories": ["점검"]}}
+
+
+# ── 주소 환경변수 ────────────────────────────────────────────────────────
+@pytest.mark.parametrize("given,기대", [
+    # AWS 콘솔이 보여 주는 꼴. 스킴이 없다
+    ("search-x.ap-northeast-2.es.amazonaws.com", "https://search-x.ap-northeast-2.es.amazonaws.com"),
+    ("https://search-x.es.amazonaws.com/", "https://search-x.es.amazonaws.com"),
+    ("  search-x.es.amazonaws.com  ", "https://search-x.es.amazonaws.com"),
+    ("http://localhost:9200", "http://localhost:9200"),
+])
+def test_주소에_스킴이_없으면_https를_붙인다(monkeypatch, given, 기대):
+    """스킴 없는 주소를 그냥 넘기면 한참 아래 opensearchpy 안에서 TypeError 로 터진다.
+
+    `urlparse('search-x...').hostname` 이 None 이라 `if ":" in host` 에서 죽는데, 주소가
+    문제라는 말이 아무 데도 안 나온다. '서버가 막혔나' 쪽을 뒤지게 된다 — 실제로 그랬다.
+    """
+    from notice_ai import config
+
+    monkeypatch.setenv("OPENSEARCH_ENDPOINT", given)
+    assert config.endpoint() == 기대
+
+
+@pytest.mark.parametrize("given", ["", "   ", "https://", "https:///path"])
+def test_주소를_못_읽으면_뜰_때_알려_준다(monkeypatch, given):
+    from notice_ai import config
+
+    monkeypatch.setenv("OPENSEARCH_ENDPOINT", given)
+    with pytest.raises(config.ConfigError):
+        config.endpoint()

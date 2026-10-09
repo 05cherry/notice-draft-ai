@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 INDEX_NAME = os.environ.get("NOTICE_INDEX", "notices_v3")
 INDEX_ALIAS = os.environ.get("NOTICE_ALIAS", "notices_live").strip()
@@ -59,9 +60,21 @@ class ConfigError(RuntimeError):
 
 
 def endpoint() -> str:
-    ep = os.environ.get("OPENSEARCH_ENDPOINT")
+    """OpenSearch 주소. 스킴이 없으면 https 를 붙인다.
+
+    AWS 콘솔은 도메인 엔드포인트를 'search-....es.amazonaws.com' 처럼 **스킴 없이** 보여 준다.
+    그대로 환경변수에 넣으면 urlparse 가 hostname 을 None 으로 주고, 한참 아래
+    opensearchpy 안에서 `TypeError: argument of type 'NoneType' is not iterable` 로 터진다.
+    주소가 틀렸다는 말이 아무 데도 안 나와서 '서버가 막혔나' 쪽을 한참 뒤지게 된다(실제로 그랬다).
+    """
+    ep = (os.environ.get("OPENSEARCH_ENDPOINT") or "").strip()
     if not ep:
         raise ConfigError("OPENSEARCH_ENDPOINT 환경변수가 필요합니다.")
+    if "://" not in ep:
+        ep = "https://" + ep
+    if not urlparse(ep).hostname:
+        raise ConfigError("OPENSEARCH_ENDPOINT 에서 host 를 읽지 못했습니다. "
+                          "예) https://search-xxx.ap-northeast-2.es.amazonaws.com")
     return ep.rstrip("/")
 
 

@@ -359,7 +359,9 @@ TYPES: tuple[NoticeType, ...] = (
     # 마켓 추가: 원화 마켓 등 신규 거래지원 545 · BTC 마켓 추가 7
     NoticeType(
         "마켓 추가", "market_add", "마켓 추가(신규 거래지원)",
-        pattern=r"마켓\s*추가|신규\s*거래지원|거래지원\s*(개시|시작)|페어\s*추가",
+        # '상장'은 옛 표현이지만 실측 550건 중 157건이 그 말을 쓴다(2022~2023년 공지).
+        # 뜻이 반대인 '상장 폐지'(거래지원종료)는 뺀다.
+        pattern=r"마켓\s*추가|신규\s*거래지원|거래지원\s*(개시|시작)|페어\s*추가|상장(?!\s*폐지)",
         required=("coins", "market", "trade_open_at"),
         optional=("network", "deposit_open_at", "details", "links"),
         query="원화 마켓 추가", title_boost=("마켓 추가",),
@@ -376,7 +378,8 @@ TYPES: tuple[NoticeType, ...] = (
     # 기관명이 본문에 반드시 들어가야 하고 재개 시점을 우리가 약속할 수 없어 다른 유형이다.
     NoticeType(
         "점검", "external_maintenance", "외부 기관 점검으로 인한 서비스 중단",
-        pattern=r"(?:점검|작업)[^\n]{0,6}으로\s*인한",
+        # '…으로 인한' 말고 '<기관> 시스템 작업 안내' 꼴도 외부 기관 일이다(은행·대외계).
+        pattern=r"(?:점검|작업)[^\n]{0,6}으로\s*인한|시스템\s*작업|대외계",
         required=("provider", "service", "maintenance_from", "maintenance_to"),
         optional=("reason", "maintenance_scope", "details"),
         query="점검으로 인한 서비스 일시 중단 안내", title_boost=("점검으로 인한",),
@@ -398,7 +401,7 @@ TYPES: tuple[NoticeType, ...] = (
     ),
     NoticeType(
         "점검", "partial_maintenance", "개별 서비스 점검",
-        pattern=r"점검|중지|중단",
+        pattern=r"점검|중지|중단|작업",
         required=("service", "maintenance_from", "maintenance_to"),
         optional=("maintenance_scope", "reason", "details", "links"),
         query="서비스 점검 안내", title_boost=("점검",),

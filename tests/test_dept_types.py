@@ -62,6 +62,48 @@ def test_기존_유형은_그대로다(category, title, subtype):
     assert route(category, title)[0].subtype == subtype
 
 
+# 실측(색인 4,650건)으로 규칙이 빠뜨린 것을 찾아 넓힌 자리. 제목은 전부 색인에 있는 실제 공지다.
+@pytest.mark.parametrize("category,title,subtype", [
+    # '상장'은 2022~2023년 공지가 쓰는 옛 표현이다. 이게 없어서 마켓 추가 general 이 31%였다
+    ("마켓 추가", "힙스(HIBS), 게이머코인(GHX) BTC 마켓 상장 및 이벤트 안내(상장 완료)", "market_add"),
+    ("마켓 추가", "울트라(UOS) BTC 마켓 상장 및 에어드랍 이벤트 지급 안내", "market_add"),
+    ("마켓 추가", "이포스(WOZX), 드래곤베인(DVC) 상장 및 에어드랍 이벤트 안내 (상장 완료)", "market_add"),
+    # 외부 기관 일은 '…으로 인한' 없이 '<기관> 시스템 작업 안내' 꼴로도 온다
+    ("점검", "SC 제일은행 대외계 시스템 작업 안내", "external_maintenance"),
+    ("점검", "1원 이체 서비스 관련 일부 은행 시스템 작업 안내", "external_maintenance"),
+    ("점검", "KCB 휴대폰 본인확인 서비스 작업 안내", "partial_maintenance"),
+    ("점검", "휴대폰 본인확인 서비스 작업 안내", "partial_maintenance"),
+])
+def test_실측으로_찾은_표현도_유형에_걸린다(category, title, subtype):
+    assert route(category, title)[0].subtype == subtype
+
+
+@pytest.mark.parametrize("category,title", [
+    # 마켓 추가 카테고리지만 상장 공지가 아니다 — 이벤트 지급은 2차(이벤트 유형)가 가져갈 몫이다
+    ("마켓 추가", "갈라(GALA) 이벤트 지급 안내"),
+    ("마켓 추가", "어셈블프로토콜(ASM), 아이비피토큰(IBP) 이벤트 지급 안내"),
+    # 점검 카테고리지만 점검이 아니라 장애다
+    ("점검", "홈페이지, 모바일APP 접속 일시 불가 안내 (정상화)"),
+])
+def test_성격이_다른_공지는_general로_남긴다(category, title):
+    """넓히다가 성격이 다른 공지까지 끌어오면 엉뚱한 틀을 들이댄다.
+
+    '이벤트 지급 안내'에 마켓·거래 개시 일시를 물으면 작성자가 답할 수 없다.
+    """
+    assert route(category, title)[0].subtype == "general"
+
+
+def test_상장_폐지는_마켓_추가가_아니다():
+    """뜻이 반대다. 카테고리가 달라 섞일 일은 없지만 규칙이 그 말을 먹으면 안 된다."""
+    import re
+
+    from notice_ai.notice_types import get_type
+
+    pat = get_type("마켓 추가", "market_add").pattern
+    assert not re.search(pat, "알에스에스쓰리(RSS3) 상장 폐지 안내")
+    assert re.search(pat, "텔러파이낸스(DEBIT) 원화 마켓 상장")
+
+
 def test_전체_서비스_점검_규칙은_개별_서비스_점검을_가져가지_않는다():
     """'빗썸 포인트샵 서비스 점검'과 '빗썸 서비스 점검'은 달라야 한다.
 

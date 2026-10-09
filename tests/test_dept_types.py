@@ -280,7 +280,7 @@ def test_새_유형의_작성_지침이_프롬프트에_실린다(category, subt
     assert 들어가야_할_말 in prompt
 
 
-def test_GET_types_가_권장값과_조건부_필수를_실제로_내려_준다():
+def test_GET_types_가_권장값과_조건부_필수를_실제로_내려_준다(monkeypatch):
     """프론트가 문답 화면을 그리는 통로다. `catalog()` 가 맞아도 엔드포인트에서 걸러질 수 있다.
 
     FastAPI 는 `response_model` 에 없는 키를 **조용히 떼어 낸다.** 나중에 응답 모델을 엄격하게
@@ -288,6 +288,9 @@ def test_GET_types_가_권장값과_조건부_필수를_실제로_내려_준다(
     """
     from fastapi.testclient import TestClient
 
+    # 이 테스트는 인증이 아니라 /types 응답을 본다. 셸에 API_TOKEN 이 켜져 있어도(배포 테스트 등)
+    # 흔들리지 않게, app 을 만들기 전에 토큰을 비운다. install 시점에 토큰을 읽으므로 import 직전에.
+    monkeypatch.delenv("API_TOKEN", raising=False)
     from notice_ai.api import app
 
     r = TestClient(app).get("/types")

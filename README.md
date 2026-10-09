@@ -11,7 +11,7 @@
 | 기능 | 상태 |
 |---|---|
 | 공지 검색창 — BM25(Nori) + 1위 점수 50% 컷, 카테고리별 건수, 쪽 나눔, 비슷한 공지(의미 검색) | ✅ |
-| 초안 생성 — 입출금·공시·거래유의·안내, 카테고리 1~2개 | ✅ |
+| 초안 생성 — 입출금·공시·거래유의·안내·거래지원종료·마켓 추가·점검, 카테고리 1~2개 | ✅ |
 | 유형 판별 — 요청문 규칙 + 규칙이 못 정하면 비슷한 공지로 추정(벡터) | ✅ |
 | 요청문에서 입력값 자동 추출 → 입력칸 미리 채우기 ([#7](https://github.com/05cherry/notice-draft-ai/issues/7)) | ✅ |
 | 사실 검증(코드) + GPT 평가 → 기준 미달이면 1회 수정 | ✅ |
@@ -150,6 +150,7 @@ Bedrock 쪽(`embeddings`·`rerank`·`hyde`)은 채팅 LLM이 아니라 이 설�
 | `GET /admin/indices` | 남아 있는 인덱스와 각각을 왜 두는지(`pattern`) | 없음 |
 | `POST /admin/indices/prune` | 쌓인 옛 인덱스 치우기. `dry_run` 기본 켜짐, **되돌릴 수 없음** | 없음 |
 | `GET /admin/subtype-check` | 형제 유형 판별이 실제로 어떻게 갈리는지(#38) | 없음 |
+| `GET /admin/routing-check` | 카테고리별로 제목이 유형에 얼마나 잡히는지 — general 비율(#10) | 없음 |
 | `GET /admin/copy-check` | 짧은 줄을 복사 판정에 넣으면 어떻게 되는지(#36) | 없음 |
 
 - 요청(/prepare·/draft·/check 공통): `{categories:[1~2개], text, inputs, subtypes?, part_inputs?, base_notice_url?, evaluate?, hybrid?}`

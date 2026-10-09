@@ -5,6 +5,7 @@
   reindex --source 이름      기존 인덱스 문서를 NOTICE_INDEX 인덱스로 복사
   check-dict                사용자 사전이 필요한지·넣으면 나아지는지 확인(색인 안 건드림)
   check-subtype              형제 유형(에어드랍 완료/예정) 판별이 얼마나 맞는지 확인
+  check-routing              카테고리별로 제목이 유형에 얼마나 잡히는지(general 비율) 확인
   check-copy                 짧은 줄을 복사 판정에 넣으면 어떻게 되는지 확인
   alias [--index 이름]       검색·색인이 보는 별칭을 만들거나 다른 인덱스로 돌린다
   rebuild-dict               지금 코인 목록으로 사전을 다시 만들어 새 인덱스로 옮기고 별칭 전환
@@ -56,6 +57,9 @@ def main() -> None:
     pt.add_argument("--category", default="", help="카테고리 하나만(생략 시 전부)")
     pt.add_argument("--limit", type=int, default=0, help="훑을 공지 수(0=전체)")
     pt.add_argument("--offset", type=int, default=0)
+
+    pg = sub.add_parser("check-routing", help="카테고리별 general 비율 확인(#10). 색인을 건드리지 않는다")
+    pg.add_argument("--category", default="", help="카테고리 하나만(생략 시 전부)")
 
     pp = sub.add_parser("check-copy", help="짧은 줄 복사 판정 확인(#36). 색인을 건드리지 않는다")
     pp.add_argument("--low", type=int, default=15, help="이 길이부터 본다(기본 15)")
@@ -167,6 +171,21 @@ def main() -> None:
                 print(f"\n  본문이 빈 것(규칙으로 못 고침) 예시 {len(r['empty_examples'])}건:")
                 for e in r["empty_examples"]:
                     print(f"    [{e['by_title']}] {e['title'][:60]}")
+    elif a.command == "check-routing":
+        from notice_ai.routing_check import diagnose
+
+        r = diagnose(a.category)
+        if r["error"]:
+            print(r["error"])
+        else:
+            print(f"색인 {r['index']} · 공지 {r['checked']}건")
+            for c in r["categories"]:
+                print(f"\n{c['category']} {c['total']}건 ·"
+                      f" general {c['general']}건({c['general_ratio']:.0%})")
+                for sub_, n in c["subtypes"].items():
+                    print(f"    {sub_:22} {n}건")
+                for t in c["general_titles"]:
+                    print(f"    general ← {t[:70]}")
     elif a.command == "check-copy":
         from notice_ai.copy_check import diagnose
 

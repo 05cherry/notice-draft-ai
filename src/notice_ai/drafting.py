@@ -36,6 +36,7 @@ from notice_ai.notice_types import (
     get_type,
     is_empty,
     now_kst,
+    required_for,
     resolve,
     routing_text,
     title_hint,
@@ -477,7 +478,7 @@ def _input_lines(parts: list[Part]) -> tuple[list[str], list[str]]:
             labels.setdefault(name, field_label(p.ntype, name))
             v = p.inputs.get(name)
             if is_empty(v):
-                if name not in p.ntype.required:
+                if name not in required_for(p.ntype, p.inputs):
                     missing[name] = None
                 continue
             given.setdefault((name, display_value(name, v)), []).append(p.category)

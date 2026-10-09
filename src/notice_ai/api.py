@@ -616,6 +616,46 @@ async def admin_subtype_check(
     return SubtypeCheckResponse(**await asyncio.to_thread(diagnose, category, limit, offset))
 
 
+class RoutingCategory(BaseModel):
+    category: str
+    total: int
+    general: int
+    general_ratio: float
+    subtypes: dict[str, int]
+    general_titles: list[str]
+
+
+class RoutingCheckResponse(BaseModel):
+    error: str
+    index: str
+    checked: int
+    categories: list[RoutingCategory]
+
+
+@app.get("/admin/routing-check", response_model=RoutingCheckResponse)
+async def admin_routing_check(
+    category: str = Query("", description="카테고리 하나만. 비우면 유형이 정의된 곳 전부"),
+) -> RoutingCheckResponse:
+    """카테고리마다 제목이 유형으로 얼마나 잡히는지 센다 (#10).
+
+    유형이 없는 공지는 `<카테고리>/general`로 가는데, general 은 제목 틀·섹션 검사·라벨
+    대조가 전부 없다. 그래서 **general_ratio** 가 그 카테고리에 유형이 얼마나 더 필요한지를
+    그대로 나타낸다. 유형을 넣은 뒤 이 값이 떨어져야 일을 한 것이다.
+
+    general 로 간 제목(general_titles)이 다음에 만들 유형의 후보다. 반복되는 표현이 보이면
+    그게 유형이고, 제각각이면 그 카테고리는 general 로 두는 게 맞다.
+
+    `/admin/subtype-check` 와 겹치지 않는다. 그쪽은 형제 유형이 본문으로 갈리는지를 재고(#38),
+    여기서는 제목이 유형에 걸리는지만 센다. 본문을 받지 않아 훑는 비용도 훨씬 작다.
+
+    색인을 건드리지 않는다. 읽기만 한다.
+    """
+    from notice_ai.routing_check import diagnose
+
+    # 공지 수만큼 도는 동기 코드라 이벤트 루프를 막지 않게 스레드로 넘긴다
+    return RoutingCheckResponse(**await asyncio.to_thread(diagnose, category))
+
+
 class CopyCheckResponse(BaseModel):
     error: str
     index: str

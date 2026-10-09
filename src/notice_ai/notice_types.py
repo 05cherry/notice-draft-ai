@@ -21,7 +21,11 @@ from pathlib import Path
 from notice_ai import coins
 
 MAX_CATEGORIES = 2
-TARGET_CATEGORIES = ("입출금", "공시", "거래유의", "안내")   # 이번 단계 구현 범위
+# 유형이 정의된 카테고리. 늘릴 때는 TYPES 에 유형을 넣고 여기에 더한다 —
+# subtype_check·copy_check 가 이 목록만 훑으므로, 여기 없는 카테고리는 점검도 안 된다.
+# '후기'는 공지를 쓸 일이 없어 넣지 않는다(초안 생성 대상이 아니다).
+TARGET_CATEGORIES = ("입출금", "공시", "거래유의", "안내",
+                     "거래지원종료", "마켓 추가", "점검")
 
 _CATEGORIES_PATH = Path(__file__).resolve().parents[2] / "data" / "categories.json"
 
@@ -60,6 +64,25 @@ def is_temporal(kind: str) -> bool:
     return kind in ("date", "datetime")
 
 
+# 입출금 중지 사유. 작성 부서 분류표(docs/NOTICE_TAXONOMY.md)의 '입출금 및 네트워크' 중분류에서
+# 중지 사유로 갈리는 것만 모았다(중분류 11개 919건 = 3,405건의 27%). 사유마다 본문에 들어갈
+# 문장이 다르기 때문에 부서가 이걸 유형으로 쓴다. 우리는 유형을 쪼개지 않고 사유를 고르게 한다.
+# '데몬 업데이트·동기화'(2건)는 '노드 점검·동기화'에 합쳤고, '기타 사유'(28건)는 사유가
+# 아니라 묶음이라 넣지 않았다.
+SUSPEND_REASONS: tuple[str, ...] = (
+    "네트워크 업그레이드",
+    "네트워크 이슈",
+    "메인넷·네트워크 전환",
+    "보안 이슈",
+    "블록 생성 중단",
+    "지갑 시스템 점검",
+    "노드 점검·동기화",
+    "정기실사",
+    "입금 주소 변경",
+    "컨트랙트 변경·토큰 스왑",
+)
+
+
 FIELDS: dict[str, Field] = {
     "coins": Field("대상 가상자산", "coins",
                    "대상 가상자산의 한글명과 티커를 알려주세요(여러 개 가능). 예) 메가이더(MEGA), 비너스(XVS)"),
@@ -92,6 +115,21 @@ FIELDS: dict[str, Field] = {
     "restored_at": Field("정상화 시점", "datetime", "정상화된 일시(정상화 공지일 때). 예) 2026-09-10 16:30"),
     "targets": Field("제한 대상 거래소·기관", "text", "예) Opal Exchange, Sadaf Exchange", exact=True),
     "restricted_at": Field("제한일", "date", "제한 적용일. 예) 2026-08-31"),
+    # 거래지원종료
+    "trade_end_at": Field("거래지원 종료 일시", "datetime", "거래지원이 종료되는 일시. 예) 2026-09-30 15:00"),
+    "withdraw_end_at": Field("출금 지원 종료 일시", "datetime",
+                             "출금을 더 받지 않는 일시. 아직 안 정했으면 '미정'. 예) 2026-10-30 15:00"),
+    # 마켓 추가
+    "market": Field("추가 마켓", "text", "어느 마켓에 추가하나요? 예) 원화(KRW), BTC, USDT"),
+    "trade_open_at": Field("거래 개시 일시", "datetime", "거래가 시작되는 일시. 예) 2026-09-10 19:00"),
+    "deposit_open_at": Field("입금 개시 일시", "datetime", "입금을 먼저 여는 경우 그 일시. 없으면 '미정'."),
+    # 점검
+    "maintenance_from": Field("점검 시작 시점", "datetime", "점검이 시작되는 일시. 예) 2026-09-10 02:00"),
+    "maintenance_to": Field("점검 종료 시점", "datetime", "점검이 끝나는 일시. 예) 2026-09-10 06:00"),
+    "maintenance_scope": Field("점검 중 영향 범위", "text",
+                               "점검 동안 무엇을 쓸 수 없나요? 예) 입출금·거래 전체 중단"),
+    "provider": Field("점검 주체 기관", "text",
+                      "점검하는 외부 기관명. 예) 정부24, KB국민은행, 금융결제원", exact=True),
     "law_clause": Field("법령·규정 조항", "text", "인용할 조항이 확정됐으면 알려주세요. 없으면 [조항 확인 필요]로 남깁니다."),
     "links": Field("참고 링크", "urls", "공지에 넣을 링크가 있으면 알려주세요."),
     "topic": Field("공지 주제", "text", "어떤 내용의 공지인가요? 한 줄로."),
@@ -116,6 +154,12 @@ class NoticeType:
     guards: tuple[tuple[str, str], ...] = ()    # (필드, 정규식) — 필드 미입력인데 초안에 있으면 오류
     roles: tuple[tuple[str, str], ...] = ()     # (정규식 (?P<ticker>…), 필드) — 이 자리의 가상자산은 그 필드 값이어야 함
     field_labels: tuple[tuple[str, str], ...] = ()  # 이 유형에서만 쓰는 필드 이름(프롬프트·질문·오류 메시지)
+    # (필드, 권장값들) — 작성 부서가 실제로 쓰는 표현. 고르게만 하고 막지 않는다.
+    # 같은 필드라도 유형마다 쓰는 말이 다르므로 Field 가 아니라 유형이 갖는다(field_labels 와 같은 이유).
+    field_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # (조건 필드, 값 정규식, 추가로 필수인 필드) — 그 값을 골랐을 때만 더 묻는다.
+    # 예) 중지 사유가 '네트워크 업그레이드'면 업그레이드 예상 시점이 본문에 거의 항상 들어간다.
+    conditional_required: tuple[tuple[str, str, str], ...] = ()
     # 제목만으로 갈리지 않는 형제 유형(같은 family)은 과거 공지 본문으로 가른다.
     # 예) 에어드랍 '지급 완료 안내'(본문 '지급이 완료되었습니다') vs '지원·지급 예정 안내'(본문 '…예정입니다')
     family: str = ""
@@ -175,6 +219,10 @@ TYPES: tuple[NoticeType, ...] = (
                 (r"재개\s*시점", "resume_at")),
         # 업데이트된 참고 공지의 재개 안내('…입출금 서비스를 재개합니다')가 새 공지에 섞이는 것 방지
         guards=(("resume_at", r"재개(?:합니다|하였습니다|되었습니다|했습니다)"),),
+        # 사유를 유형으로 쪼개지 않고 고르게 한다(#10). 작성 부서는 이 사유로 공지를 나눈다.
+        field_choices=(("reason", SUSPEND_REASONS),),
+        # 업그레이드 공지(585건, 입출금 중 최다)는 업그레이드 예상 시점이 본문에 거의 항상 들어간다.
+        conditional_required=(("reason", r"업그레이드|하드포크", "upgrade_at"),),
     ),
     # 거래유의 287건: 지정 157 · 연장 64 · 해제 64
     NoticeType(
@@ -292,12 +340,99 @@ TYPES: tuple[NoticeType, ...] = (
         query="서비스 일시 지연 안내", title_boost=("일시 지연",),
         title_template="{service} 일시 지연 안내",
     ),
+    # ── 아래 세 카테고리는 작성 부서 분류표(docs/NOTICE_TAXONOMY.md)를 근거로 넣었다(#10).
+    #    건수는 부서 집계(2022 ~ 2026-09-16, 3,405건) 기준이다.
+    # 거래지원종료: 거래지원 종료 82 · 종료 일정 변경 3
+    NoticeType(
+        "거래지원종료", "terminate", "거래지원 종료",
+        # '일정 변경'(3건)도 여기로 온다 — 묻는 항목이 같고, 변경된 일시를 다시 받으면 된다.
+        pattern=r"거래지원\s*종료|거래\s*지원\s*종료|상장\s*폐지",
+        required=("coins", "trade_end_at", "withdraw_end_at", "reason"),
+        optional=("next_review", "law_clause", "links"),
+        query="거래지원 종료", title_boost=("거래지원 종료",),
+        title_template="{coins} 거래지원 종료",
+        sections=(("종료 사유", r"사유"), ("종료 일정", r"종료\s*(일시|일정)"), ("유의사항", r"유의")),
+        labels=((r"거래지원\s*종료\s*일시", "trade_end_at"), (r"출금\s*지원\s*종료", "withdraw_end_at")),
+        # 참고 공지의 출금 기한이 입력 없이 옮겨지면 회원이 자산을 못 뺀다. 날짜는 베끼면 안 된다.
+        guards=(("withdraw_end_at", r"출금[^\n]{0,10}(종료|마감)\s*(일시|시점)?\s*:"),),
+    ),
+    # 마켓 추가: 원화 마켓 등 신규 거래지원 545 · BTC 마켓 추가 7
+    NoticeType(
+        "마켓 추가", "market_add", "마켓 추가(신규 거래지원)",
+        pattern=r"마켓\s*추가|신규\s*거래지원|거래지원\s*(개시|시작)|페어\s*추가",
+        required=("coins", "market", "trade_open_at"),
+        optional=("network", "deposit_open_at", "details", "links"),
+        query="원화 마켓 추가", title_boost=("마켓 추가",),
+        title_template="{coins} {market} 마켓 추가",
+        sections=(("대상 가상자산", r"대상\s*가상자산"), ("거래 개시", r"개시|오픈"),
+                  ("유의사항", r"유의")),
+        labels=((r"거래\s*개시", "trade_open_at"), (r"입금\s*(개시|가능)", "deposit_open_at"),
+                (r"대상\s*네트워크", "network")),
+        field_choices=(("market", ("원화(KRW)", "BTC", "USDT")),),
+    ),
+    # 점검 총 146: 신분증 진위확인 42 · 은행 연계 8 · 고객확인·인증 1 (= 외부 기관 51)
+    #            · 기타 38 · 포인트샵 18 · 상담 9 (= 개별 65) · 전체 서비스 30
+    # 외부 기관 점검을 먼저 본다. '정부24 점검으로 인한 …'은 개별 점검 규칙에도 걸리는데,
+    # 기관명이 본문에 반드시 들어가야 하고 재개 시점을 우리가 약속할 수 없어 다른 유형이다.
+    NoticeType(
+        "점검", "external_maintenance", "외부 기관 점검으로 인한 서비스 중단",
+        pattern=r"(?:점검|작업)[^\n]{0,6}으로\s*인한",
+        required=("provider", "service", "maintenance_from", "maintenance_to"),
+        optional=("reason", "maintenance_scope", "details"),
+        query="점검으로 인한 서비스 일시 중단 안내", title_boost=("점검으로 인한",),
+        title_template="{provider} 점검으로 인한 {service} 일시 중단 안내",
+        sections=(("중단 대상 서비스", r"대상\s*서비스|중단\s*(대상|서비스)"),
+                  ("중단 시간", r"(중단|점검)\s*(일시|시간)")),
+        labels=((r"(점검|중단)\s*(일시|시간)", "maintenance_from"),),
+    ),
+    NoticeType(
+        "점검", "maintenance", "전체 서비스 점검",
+        # '빗썸 포인트샵 서비스 점검'이 걸리지 않게 빗썸·전체 바로 뒤의 '서비스 점검'만 본다.
+        pattern=r"(?:빗썸|전체)\s*서비스\s*점검",
+        required=("maintenance_from", "maintenance_to", "maintenance_scope"),
+        optional=("reason", "details", "links"),
+        query="빗썸 서비스 점검 안내", title_boost=("서비스 점검",),
+        title_template="빗썸 서비스 점검 안내",
+        sections=(("점검 시간", r"점검\s*(일시|시간)"), ("점검 중 이용 제한", r"제한|중단|불가")),
+        labels=((r"점검\s*(일시|시간)", "maintenance_from"),),
+    ),
+    NoticeType(
+        "점검", "partial_maintenance", "개별 서비스 점검",
+        pattern=r"점검|중지|중단",
+        required=("service", "maintenance_from", "maintenance_to"),
+        optional=("maintenance_scope", "reason", "details", "links"),
+        query="서비스 점검 안내", title_boost=("점검",),
+        title_template="{service} 점검 안내",
+        sections=(("점검 대상", r"대상\s*서비스|점검\s*대상"), ("점검 시간", r"점검\s*(일시|시간)")),
+        labels=((r"점검\s*(일시|시간)", "maintenance_from"),),
+    ),
 )
 
 
 def field_label(ntype: NoticeType, name: str) -> str:
     """유형별 이름이 있으면 그것, 없으면 공통 이름."""
     return dict(ntype.field_labels).get(name, FIELDS[name].label)
+
+
+def field_choices(ntype: NoticeType, name: str) -> tuple[str, ...]:
+    """이 유형에서 그 필드에 권장하는 값들. 없으면 빈 값."""
+    return dict(ntype.field_choices).get(name, ())
+
+
+def required_for(ntype: NoticeType, inputs: dict | None = None) -> tuple[str, ...]:
+    """지금 입력값을 보고 정한 필수 목록.
+
+    `required` 는 늘 필수고, `conditional_required` 는 조건 필드가 그 값일 때만 더해진다.
+    조건 필드 자체가 비어 있으면 아직 알 수 없으므로 더하지 않는다 — 그걸 먼저 묻고,
+    답이 오면 다음 차례에 추가 항목을 묻는다.
+    """
+    out = list(ntype.required)
+    got = inputs or {}
+    for cond, value_re, extra in ntype.conditional_required:
+        v = got.get(cond)
+        if isinstance(v, str) and re.search(value_re, v) and extra not in out:
+            out.append(extra)
+    return tuple(out)
 
 
 def known_categories() -> tuple[str, ...]:
@@ -586,7 +721,7 @@ def resolve(
 
     seen: dict[str, dict] = {}
     for p in res.parts:
-        for name in p.ntype.required:
+        for name in required_for(p.ntype, p.inputs):
             if is_empty(p.inputs.get(name)):
                 entry = seen.get(name)
                 if entry:   # 두 파트 모두 없으면 한 번만 묻는다(공통 값으로 채우면 됨)
@@ -595,6 +730,8 @@ def resolve(
                 f = FIELDS[name]
                 entry = {"field": name, "label": field_label(p.ntype, name), "question": f.question,
                          "categories": [p.category]}
+                if choices := field_choices(p.ntype, name):
+                    entry["choices"] = list(choices)
                 seen[name] = entry
                 res.missing.append(entry)
         for name in p.ntype.fields:
@@ -652,10 +789,18 @@ def catalog() -> list[dict]:
     for c in TARGET_CATEGORIES:
         subs = []
         for t in types_for(c):
+            def entry(n: str, t: NoticeType = t) -> dict:
+                d = {"field": n, **asdict(FIELDS[n]), "label": field_label(t, n)}
+                if choices := field_choices(t, n):
+                    d["choices"] = list(choices)   # 프론트에서 고르게 할 권장값
+                return d
             subs.append({
                 "subtype": t.subtype, "label": t.label,
-                "required": [{"field": n, **asdict(FIELDS[n]), "label": field_label(t, n)} for n in t.required],
-                "optional": [{"field": n, **asdict(FIELDS[n]), "label": field_label(t, n)} for n in t.optional],
+                "required": [entry(n) for n in t.required],
+                "optional": [entry(n) for n in t.optional],
+                # 조건부 필수(예: 사유가 '네트워크 업그레이드'면 업그레이드 예상 시점도 필수)
+                "conditional_required": [{"when_field": c_, "when_matches": v, "field": f_}
+                                         for c_, v, f_ in t.conditional_required],
             })
         out.append({"category": c, "subtypes": subs})
     return out
